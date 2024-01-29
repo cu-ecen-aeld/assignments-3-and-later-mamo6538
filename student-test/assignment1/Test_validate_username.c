@@ -16,6 +16,6 @@ void test_validate_my_username()
 {
     //TEST_ASSERT_TRUE_MESSAGE(false,"AESD students, please fix me!");
     char* ptr = malloc_username_from_conf_file();
-    TEST_ASSERT_EQUAL_STRING_MESSAGE(my_username(),ptr,"config file matches hardcoded username.");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(my_username(),ptr,"config file does not match hardcoded username.");
     free(ptr);
 }

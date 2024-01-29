@@ -10,15 +10,18 @@ if [ $# -lt 2 ]; then #check parameters
 fi
 ##-------------------------------------------
 
+writefile=$1
+writestr=$2
+
 #check if directory exists and make it if not
 #got help from https://unix.stackexchange.com/questions/305844/how-to-create-a-file-and-parent-directories-in-one-command 
-mkdir -p "$(dirname "$1")"
-touch $1
+mkdir -p "$(dirname "$writefile")"
+touch $writefile
 
 #error checking for if file was created
-if [ ! -f $1 ]; then
- echo $1 could not be created
+if [ ! -f $writefile ]; then
+ echo $writefile could not be created
  return 1
 fi
 
-echo $2 > $1
+echo $writestr > $writefile
