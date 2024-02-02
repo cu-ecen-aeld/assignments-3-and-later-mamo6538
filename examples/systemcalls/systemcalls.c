@@ -1,4 +1,8 @@
 #include "systemcalls.h"
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -11,12 +15,16 @@ bool do_system(const char *cmd)
 {
 
 /*
- * TODO  add your code here
+ * Done  add your code here
  *  Call the system() function with the command set in the cmd
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
+    int result = system(cmd);
+    if(result != 0) { //if failure
+    	perror("a3_system");
+    	return false;
+    }
     return true;
 }
 
@@ -48,18 +56,40 @@ bool do_exec(int count, ...)
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
     command[count] = command[count];
-
-/*
- * TODO:
- *   Execute a system command by calling fork, execv(),
- *   and wait instead of system (see LSP page 161).
- *   Use the command[0] as the full path to the command to execute
- *   (first argument to execv), and use the remaining arguments
- *   as second argument to the execv() command.
- *
-*/
-
+    
     va_end(args);
+    
+    //flush for clarity
+    fflush(stdout);
+    pid_t cpid = fork();
+    if(cpid == 0) { //this is child process
+    	execv(command[0], command);
+    	//this is in event of an error!
+    	perror("a3_execv");
+    	return false;
+    	
+    }
+    else if(cpid == -1){ //this is failure condition of fork
+    	perror("a3_fork");
+    	return false;
+    }
+    else { //this is the parent process
+    	int status;
+    	pid_t expid = wait(&status);
+    	if(expid == -1) {
+    	    perror("a3_wait");
+            return false;
+    	}
+    	//need to check the return value of the child
+    	if(WIFEXITED(status)) {
+    	    if(status != 0) return false;
+    	}
+    	else {
+    	    perror("a3_wifexit");
+    	    return false;
+    	}
+    	
+    }
 
     return true;
 }
@@ -83,17 +113,62 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
     command[count] = command[count];
-
+    va_end(args);
 
 /*
- * TODO
+ * Done
  *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a refernce,
  *   redirect standard out to a file specified by outputfile.
  *   The rest of the behaviour is same as do_exec()
  *
 */
-
-    va_end(args);
+    //setup redirect as in link above
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if(fd < 0){ 
+        perror("a3_open");
+        return false;
+    }
+    
+    //flush for clarity
+    fflush(stdout);
+    pid_t cpid = fork();
+    if(cpid == 0) { //this is child process
+    	//perform redirect as in link above (similar to echo _ 2>&1)
+    	int nf = dup2(fd, 1);
+    	if(nf == -1){ 
+    	    perror("a3_dup2");
+    	    return false;
+    	}
+    	close(fd);
+    	//perform execv
+    	execv(command[0], command);
+    	//will not return unless failure....
+    	perror("a3_execv");
+    	return false;
+    }
+    else if(cpid == -1){ //this is failure condition of fork
+    	close(fd);
+    	perror("a3_fork");
+    	return false;
+    }
+    else { //this is the parent process
+    	close(fd);
+    	int status;
+    	pid_t exited_pid = wait(&status);
+    	if(exited_pid == -1) {
+    	    perror("a3_wait");
+            return false;
+    	}
+    	
+    	//need to check the return value of the child
+    	if(WIFEXITED(status)) {
+    	    if(status != 0) return false;
+    	}
+    	else {
+    	    printf("child didn't exit normally.");
+    	    return false;
+    	}
+    }
 
     return true;
 }
