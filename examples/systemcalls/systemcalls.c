@@ -59,14 +59,14 @@ bool do_exec(int count, ...)
     
     va_end(args);
     
-    //flush for clarity
+    //flush
     fflush(stdout);
     pid_t cpid = fork();
     if(cpid == 0) { //this is child process
     	execv(command[0], command);
     	//this is in event of an error!
     	perror("a3_execv");
-    	return false;
+    	exit(1);
     	
     }
     else if(cpid == -1){ //this is failure condition of fork
@@ -129,7 +129,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         return false;
     }
     
-    //flush for clarity
+    //flush
     fflush(stdout);
     pid_t cpid = fork();
     if(cpid == 0) { //this is child process
@@ -144,7 +144,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     	execv(command[0], command);
     	//will not return unless failure....
     	perror("a3_execv");
-    	return false;
+    	exit(1);
     }
     else if(cpid == -1){ //this is failure condition of fork
     	close(fd);
