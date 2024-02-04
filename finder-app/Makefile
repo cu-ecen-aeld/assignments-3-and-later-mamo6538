@@ -1,10 +1,13 @@
+CC := $(CROSS_COMPILE)gcc
+CFLAGS := -g -Wall -Werror
+
 all: writer
 
 writer: writer.o
-	$(CROSS_COMPILE)gcc -g -Wall -o writer writer.o
+	$(CC) $(CFLAGS) -o writer writer.o
 
 writer.o: writer.c
-	$(CROSS_COMPILE)gcc -g -Wall -c writer.c
+	$(CC) $(CFLAGS) -c writer.c
 
 clean:
-	rm -rf *o *stackdump writer
+	rm -rf *.o *stackdump writer
