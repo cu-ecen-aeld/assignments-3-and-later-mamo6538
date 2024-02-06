@@ -46,13 +46,16 @@ int writer(const char* writefile, char* writestr) {
 int main(int argc, char *argv[]) {
 	//setup syslog
 	openlog("assignment2_", 0, LOG_USER);
+	int result;
 	
 	//ERROR checking
-	if (argc < 2) {
+	if (argc < 3) {
 		syslog(LOG_ERR, "Not enough arguments:%d Need a writefile and writestr argument.\n", argc);
-		return 1;
+		result = 1;
 	}
-	int result = writer(argv[1], argv[2]);
+	else {
+	    result = writer(argv[1], argv[2]);
+	}
 	
 	closelog();
 	return result;
