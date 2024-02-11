@@ -5,6 +5,7 @@
 set -e
 set -u
 
+PATH_DIR=$(dirname $0)
 NUMFILES=10
 WRITESTR=AELD_IS_FUN
 WRITEDIR=/tmp/aeld-data
@@ -54,10 +55,10 @@ fi
 
 for i in $( seq 1 $NUMFILES)
 do
-	${PATH}/writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
+	${PATH_DIR}/writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
 done
 
-OUTPUTSTRING=$(${PATH}/finder.sh "$WRITEDIR" "$WRITESTR")
+OUTPUTSTRING=$(${PATH_DIR}/finder.sh "$WRITEDIR" "$WRITESTR")
 
 echo $OUTPUTSTRING > /tmp/assignment4-result.txt
 
