@@ -16,7 +16,7 @@ struct thread_data{
      */
      int wait_obtain_ms;
      int wait_release_ms;
-     pthread_mutex_t* m; //idk if we want this, but I think we do
+     pthread_mutex_t* m;
 
     /**
      * Set to true if the thread completed with success, false
