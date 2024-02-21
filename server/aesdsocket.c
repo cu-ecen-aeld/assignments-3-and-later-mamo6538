@@ -323,9 +323,9 @@ int main(int argc, char* argv[]) {
 		chdir("/");
 		//close file descriptors - NOPE I need them.
 		//redirect stdin/out/err to /dev/null
-		fclose(stdin);  stdin  = fopen("/dev/null", "r");
-		fclose(stdout); stdout = fopen("/dev/null", "w");
-		fclose(stderr); stderr = fopen("/dev/null", "w");
+		freopen("/dev/null", "r", stdin);
+		freopen("/dev/null", "w", stdout);
+		freopen("/dev/null", "w", stderr);
 	}
 	
 	//make/open the file for appending and read/write
