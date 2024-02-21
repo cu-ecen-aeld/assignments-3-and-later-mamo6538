@@ -33,18 +33,25 @@ char host[NI_MAXHOST];
 int caught_sig = 0;
 int sfd; //make socket global for shutdown
 
-//TODO:support -d argument for creating daemon
-
-
 //function: signal handler
+// to handle the SIGINT and SIGTERM signals
+// force exit from main while loop
+// and shutdown the socket
 static void signal_handler( int sn ) {
-	caught_sig = 1;
-	shutdown(sfd, SHUT_RDWR);
+	if(sn == SIGTERM || sn == SIGINT) {
+		caught_sig = 1;
+		shutdown(sfd, SHUT_RDWR);
+	}
 }
 
 /* FILE_WRITE 
- * Description: appends to already opened file
- *   specifically handles errors - may not be necessary as separate function
+ * Description: writes packet to end of file
+ *   specifically handles errors in writing
+ * Input:
+ *  fd = file descriptor of output file
+ *  data = address of data to write
+ *  len = length of the data to write
+ * Output: -1 if error, 0 if success
  */
 int file_write(int fd, char* data, ssize_t len) {
 	int result;
@@ -64,14 +71,17 @@ int file_write(int fd, char* data, ssize_t len) {
 	return result;
 }
 
-//SEND_FILE
-//TODO: handle a large file send (larger than heap).  line by line?
-int send_file(int fd, int socket) {
+/*SEND_LINE
+ * Description:
+ * Input:
+ * Output:
+ */
+int send_line(int socket, int fd) {
 	char read_buf[MAX_BUF_SIZE];
 	off_t cur_off = 0;
-	char* wbuffer = malloc(1);
-	*wbuffer = '\0'; //initialize to null character
+	
 	int result;
+	char last_byte = 0;
 	
 	while(1) {
 		//read from socket the max allowed at a time
@@ -83,34 +93,26 @@ int send_file(int fd, int socket) {
 		}
 		if(num_read == 0) { //end of file reached
 			result = 0;
+			if(last_byte != '\n') {
+				int rc = send(socket, "\n", 1, 0);
+				if(rc == -1) syslog(LOG_ERR, "failed to send:%m\n");
+			}
 			break;
 		}
 		
-		//reallocate buffer with strlen(read_buf) + strlen(buffer) + \0
-		size_t new_len = num_read + cur_off + 1;
-		char* tmp = realloc(wbuffer, new_len);
-		if(!tmp) {
-			syslog(LOG_ERR, "Buffered file read: %m\n");
+		//send *some* data via socket
+		ssize_t rc = send(socket, read_buf, num_read, 0);
+		if(rc == -1) {
+			syslog(LOG_ERR, "Failed to send:%m\n");
 			result = -1;
 			break;
 		}
-		wbuffer = tmp;
-		
-		//concatenate contents into buffer
-		strncat(wbuffer, read_buf, num_read);
+		last_byte = read_buf[num_read-1];
 		
 		//increase offset to read
 		cur_off += num_read;
 	
 	}//end while
-	
-	//send full file via socket
-	int rc = send(socket, wbuffer, cur_off, 0);
-	if(rc == -1) {
-		syslog(LOG_ERR, "Failed to send:%m\n");
-		result = -1;
-	}
-	free(wbuffer);
 	
 	return result;
 }
@@ -128,7 +130,6 @@ int send_file(int fd, int socket) {
 int read_packet(int socket, int fd) {
 	int result;
 	char read_buf[MAX_BUF_SIZE];
-	memset(&read_buf, 0, sizeof(read_buf)); //default to 0s
 	
 	char* buffer = malloc(1);
 	if(!buffer) {
@@ -139,8 +140,9 @@ int read_packet(int socket, int fd) {
 	ssize_t bufs = 0;
 	
 	while(1) {
+		memset(read_buf, 0, MAX_BUF_SIZE); //default to 0s
 		//read from socket the max allowed at a time
-		ssize_t num_read = recv(socket, read_buf, MAX_BUF_SIZE, 0);
+		ssize_t num_read = recv(socket, read_buf, MAX_BUF_SIZE-1, 0);
 		if(num_read == -1) {
 			syslog(LOG_ERR, "Failed to recv: %m\n");
 			result = -1;
@@ -168,9 +170,9 @@ int read_packet(int socket, int fd) {
 			//concatenate contents into buffer
 			strcat(buffer, read_buf);
 			
-			
 			//break out if read the end of packet
-			if(read_buf[num_read] == '\0') {
+			int eop = num_read -1;
+			if(read_buf[eop] == '\n') {
 				result = 1;
 				break;
 			}
@@ -206,7 +208,10 @@ int accept_socket(int sfd) {
 		return -1;
 	}
 	//pull client_ip from client_addr
-	getnameinfo((struct sockaddr*)&client_addr, client_addr_size, host, sizeof(host), NULL, 0, NI_NUMERICHOST);
+	int rc = getnameinfo((struct sockaddr*)&client_addr, client_addr_size, host, sizeof(host), NULL, 0, NI_NUMERICHOST);
+	if(rc != 0) {
+		syslog(LOG_ERR, "Failed to get new hostname:%m\n");
+	}
 	syslog(LOG_DEBUG, "Accepted connection from %s\n", host);
 	return new_sfd;
 }
@@ -292,6 +297,13 @@ int main(int argc, char* argv[]) {
 		result = -1;
 	}
 	
+	//TODO:support -d argument for creating daemon
+	//fork to create daemon here-- (socket bound, signal actions will carry over)
+		//exit in parent
+		//setsid and change directory
+		//close file pointers?? 
+		//redirect stdin/out/err - use syslog?
+	
 	//make/open the file for appending and read/write
 	int fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR |
 	                                                     S_IRGRP | S_IWGRP | 
@@ -303,7 +315,7 @@ int main(int argc, char* argv[]) {
 	
 	//continually accept!
 	int nsfd;
-	
+	int i = 0;
 	while(!caught_sig && !result) {
 		nsfd = accept_socket(sfd);
 		if(nsfd == -1) continue;
@@ -321,13 +333,15 @@ int main(int argc, char* argv[]) {
 				break;
 			}
 			
+			
 			//echo the file back
-			send_file(fd, nsfd);
+			send_line(nsfd, fd);
 			
 		} //end of reading packets
 		
 		syslog(LOG_DEBUG, "Closed connection from %s\n", host);
 		close(nsfd); //close accepted socket
+		i++; //TODO remove before submittal
 	}
 	syslog(LOG_DEBUG, "Caught signal, exiting\n");
 	 
