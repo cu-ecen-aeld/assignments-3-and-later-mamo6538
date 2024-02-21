@@ -46,11 +46,11 @@ static void signal_handler( int sn ) {
  * Description: appends to already opened file
  *   specifically handles errors - may not be necessary as separate function
  */
-int file_write(int fd, char* data, size_t len) {
+int file_write(int fd, char* data, ssize_t len) {
 	int result;
 	
 	//write data to file
-	int rc = write(fd, data, len);
+	ssize_t rc = write(fd, data, len);
 	if(rc == -1) { //failure to write!
 		syslog(LOG_ERR, "Failed to file write:%m\n");
 		result = -1;
@@ -88,12 +88,13 @@ int send_file(int fd, int socket) {
 		
 		//reallocate buffer with strlen(read_buf) + strlen(buffer) + \0
 		size_t new_len = num_read + cur_off + 1;
-		wbuffer = realloc(wbuffer, new_len);
-		if(!wbuffer) {
+		char* tmp = realloc(wbuffer, new_len);
+		if(!tmp) {
 			syslog(LOG_ERR, "Buffered file read: %m\n");
 			result = -1;
 			break;
 		}
+		wbuffer = tmp;
 		
 		//concatenate contents into buffer
 		strncat(wbuffer, read_buf, num_read);
@@ -117,16 +118,24 @@ int send_file(int fd, int socket) {
 /*READ_PACKET 
  * Description: buffered reads the packet of data
  *  assumes the end of a packet is from null terminator
+ *  writes the data out to specified file
  * Inputs: 
  *  socket = socket file descriptor to read data from
  *  buffer = malloc'd char* to hold the entire packet
  * Output:
- *  result = -1 upon failure, 0 if connection closed, or #bytes read
+ *  result = -1 upon failure, 0 if connection closed, 1 if successful
  */
-int read_packet(int socket, char* buffer) {
+int read_packet(int socket, int fd) {
 	int result;
 	char read_buf[MAX_BUF_SIZE];
 	memset(&read_buf, 0, sizeof(read_buf)); //default to 0s
+	
+	char* buffer = malloc(1);
+	if(!buffer) {
+		syslog(LOG_ERR, "Failed to malloc: %m\n");
+		result = -1;
+	}
+	*buffer = '\0'; //initialize to null pointer terminated string
 	ssize_t bufs = 0;
 	
 	while(1) {
@@ -142,8 +151,8 @@ int read_packet(int socket, char* buffer) {
 			break;
 		}
 		else {
-			//reallocate buffer with num_read + buffer size + \0
-			size_t new_len = num_read + bufs + 1;
+			//reallocate buffer with string lengths of char arrays + \0
+			size_t new_len = strlen(read_buf) + strlen(buffer) + 1;
 			char* tmp = realloc(buffer, new_len);
 			if(!tmp) {
 				syslog(LOG_ERR, "Failed to realloc write buffer: %m\n");
@@ -152,7 +161,6 @@ int read_packet(int socket, char* buffer) {
 			}
 			//mem handling
 			buffer = tmp;
-			free(tmp);
 			
 			//increase total size of packet
 			bufs += num_read;
@@ -160,14 +168,26 @@ int read_packet(int socket, char* buffer) {
 			//concatenate contents into buffer
 			strcat(buffer, read_buf);
 			
+			
 			//break out if read the end of packet
 			if(read_buf[num_read] == '\0') {
-				result = bufs;
+				result = 1;
 				break;
 			}
 		} //end if-else
 	
 	}//end while
+	
+	//only write packet upon successful read
+	if(result == 1) {
+		//write buffer to file
+		int num_w = file_write(fd, buffer, bufs);
+		if(num_w != 0) {
+			syslog(LOG_ERR, "Failed to write to the file\n");
+			result = -1;
+		}
+	}
+	free(buffer);
 	return result;
 }
 
@@ -283,13 +303,6 @@ int main(int argc, char* argv[]) {
 	
 	//continually accept!
 	int nsfd;
-	char* buffer;
-	buffer = malloc(1);
-	if(!buffer) {
-		syslog(LOG_ERR, "Failed to malloc: %m\n");
-		result = -1;
-	}
-	*buffer = '\0'; //initialize to null pointer terminated string
 	
 	while(!caught_sig && !result) {
 		nsfd = accept_socket(sfd);
@@ -298,7 +311,7 @@ int main(int argc, char* argv[]) {
 		//continuously read on a socket
 		while(1) {
 			//read full packet
-			int rc = read_packet(nsfd, buffer);
+			int rc = read_packet(nsfd, fd);
 			if(rc == -1) { //reading/echoing failed in some way
 				syslog(LOG_ERR, "Not reading correctly.\n");
 				result = -1;
@@ -308,25 +321,9 @@ int main(int argc, char* argv[]) {
 				break;
 			}
 			
-			//write buffer to file
-			int num_w = file_write(fd, buffer, rc);
-			if(num_w != 0) {
-				syslog(LOG_ERR, "Failed to write to the buffer\n");
-			}
-			
 			//echo the file back
 			send_file(fd, nsfd);
 			
-			//reinitialize for next loop
-			char* tmp = realloc(buffer, 1);
-			if(!tmp) {
-				syslog(LOG_ERR, "Failed to realloc rbuf\n");
-				result = -1;
-				break;
-			}
-			buffer = tmp;
-			free(tmp);
-			*buffer = '\0';
 		} //end of reading packets
 		
 		syslog(LOG_DEBUG, "Closed connection from %s\n", host);
@@ -335,11 +332,10 @@ int main(int argc, char* argv[]) {
 	syslog(LOG_DEBUG, "Caught signal, exiting\n");
 	 
 	close(fd); //close writing file
-	close(nsfd); //close accepted socket
+	close(nsfd); //try to close accepted socket
 	close(sfd); //close socket
 	
 	unlink(FILENAME);
 	closelog();
-	free(buffer);
 	return result;
 }
