@@ -72,9 +72,12 @@ int file_write(int fd, char* data, ssize_t len) {
 }
 
 /*SEND_LINE
- * Description:
- * Input:
+ * Description: sends a portion of the file at a time (defined by MAX_BUF_SIZE)
+ * Input: 
+ *  socket = the socket to echo the file to
+ *  fd = file descriptor for the file to be read
  * Output:
+ *  -1 if error, 0 if successful
  */
 int send_line(int socket, int fd) {
 	char read_buf[MAX_BUF_SIZE];
@@ -339,7 +342,6 @@ int main(int argc, char* argv[]) {
 	
 	//continually accept!
 	int nsfd;
-	int i = 0;
 	while(!caught_sig && !result) {
 		nsfd = accept_socket(sfd);
 		if(nsfd == -1) continue;
@@ -365,7 +367,6 @@ int main(int argc, char* argv[]) {
 		
 		syslog(LOG_DEBUG, "Closed connection from %s\n", host);
 		close(nsfd); //close accepted socket
-		i++; //TODO remove before submittal
 	}
 	syslog(LOG_DEBUG, "Caught signal, exiting\n");
 	 
