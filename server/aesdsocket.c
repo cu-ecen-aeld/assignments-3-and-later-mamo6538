@@ -297,12 +297,36 @@ int main(int argc, char* argv[]) {
 		result = -1;
 	}
 	
-	//TODO:support -d argument for creating daemon
-	//fork to create daemon here-- (socket bound, signal actions will carry over)
-		//exit in parent
+	//support -d argument for creating daemon
+	if(argc == 2) {
+		//compare argv[1] with "-d"
+		int res = strcmp(argv[1], "-d");
+		if(res != 0) {
+			syslog(LOG_ERR, "ERROR: incorrect arguments.\n");
+			syslog(LOG_ERR, "Usage: ./aesdsocket or ./aesdsocket -d\n");
+			result = -1;
+		}
+		
+		//fork to create daemon here-- (socket bound, signal actions will carry over)
+		pid_t cpid = fork();
+		if(cpid == -1){ //this is failure condition of fork
+			syslog(LOG_ERR,"a5_fork:%m\n");
+			exit(-1);
+		}
+		else if(cpid != 0) { //this is parent process
+			//exit in parent
+			exit(0); //success
+		}
+		
 		//setsid and change directory
-		//close file pointers?? 
-		//redirect stdin/out/err - use syslog?
+		setsid();
+		chdir("/");
+		//close file descriptors - NOPE I need them.
+		//redirect stdin/out/err to /dev/null
+		fclose(stdin);  stdin  = fopen("/dev/null", "r");
+		fclose(stdout); stdout = fopen("/dev/null", "w");
+		fclose(stderr); stderr = fopen("/dev/null", "w");
+	}
 	
 	//make/open the file for appending and read/write
 	int fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR |
