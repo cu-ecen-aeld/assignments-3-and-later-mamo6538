@@ -63,24 +63,54 @@ int file_write(int fd, char* data, size_t len) {
 }
 
 //SEND_FILE
-
+//TODO: handle a large file send (larger than heap).  line by line?
 int send_file(int fd, int socket) {
-	char data[MAX_BUF_SIZE];
+	char read_buf[MAX_BUF_SIZE];
+	off_t cur_off = 0;
+	char* buffer = malloc(1);
+	*buffer = '\0'; //initialize to null character
+	int result;
 	
-	//read from start of file
-	ssize_t num_read = pread(fd, data, 10, 0);
-	printf("read: %ld", num_read);
-	if(num_read == -1) {
-		syslog(LOG_ERR, "Trying to read file failed: %m\n");
-		return -1;
-	}
+	while(1) {
+		//read from socket the max allowed at a time
+		ssize_t num_read = pread(fd, read_buf, MAX_BUF_SIZE, cur_off);
+		if(num_read == -1) {
+			syslog(LOG_ERR, "Buffered file read:%m\n");
+			result = -1;
+			break;
+		}
+		if(num_read == 0) { //end of file reached
+			result = 0;
+			break;
+		}
+		
+		//reallocate buffer with strlen(read_buf) + strlen(buffer) + \0
+		size_t new_len = num_read + cur_off + 1;
+		buffer = realloc(buffer, new_len);
+		if(!buffer) {
+			syslog(LOG_ERR, "Buffered file read: %m\n");
+			result = -1;
+			break;
+		}
+		
+		//concatenate contents into buffer
+		strncat(buffer, read_buf, num_read);
+		
+		//increase offset to read
+		cur_off += num_read;
+	
+	}//end while
+	
 	//send full file via socket
-	int rc = send(socket, data, num_read, 0);
+	ssize_t len_file = cur_off;
+	int rc = send(socket, buffer, len_file, 0);
 	if(rc == -1) {
 		syslog(LOG_ERR, "Failed to send:%m\n");
-		return -1;
+		result = -1;
 	}
-	return 0;
+	free(buffer);
+	
+	return result;
 }
 
 /*READ_PACKET 
@@ -229,8 +259,8 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 	
-	//make/open the file for appending
-	int fd = open(FILENAME, O_CREAT | O_WRONLY | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+	//make/open the file for appending and read/write
+	int fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 	if(fd == -1) {
 		syslog(LOG_ERR, "%m\n");
 		closelog();
@@ -279,8 +309,7 @@ int main(int argc, char* argv[]) {
 			}
 			
 			//echo the file back
-			num_w = file_write(nsfd, buffer, num_to_write);
-			printf("tried to echo back.\n");
+			send_file(fd, nsfd);
 			
 			free(buffer);
 		} //end of reading packets
@@ -289,14 +318,14 @@ int main(int argc, char* argv[]) {
 		syslog(LOG_DEBUG, "Closed connection from %s\n", host);
 		close(nsfd); //close accepted socket
 	}
-	
-	//only upon a signal will this occur
-	if(buffer) free(buffer); //only free if it still exists: will need to do further efforts.  
+	syslog(LOG_DEBUG, "Caught signal, exiting\n");
+	 
 	close(fd); //close writing file
 	close(nsfd); //close accepted socket
 	close(sfd); //close socket
 	
 	//delete writing file
 	closelog();
+	if(buffer) free(buffer); //only free if it still exists: will need to do further efforts. 
 	return 0;
 }
