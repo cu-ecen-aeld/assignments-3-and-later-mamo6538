@@ -1,9 +1,12 @@
-/* Assignment 5 Socket code
+/* Assignment 5 & 6 Socket code
  * Author: Madeleine Monfort
  * Description:
  *  Creates a socket bound to port 9000 that echoes back everything it receives.
  *  It also saves the received data into a file, and buffers before echoing back.
  *  This program has the ability to run as a daemon with the '-d' flag.
+ *  
+ *  Assignment 6 addition:
+ *    This program will also spawn new threads upon each accept.
  *
  * Exit:
  *  This application will exit upon reciept of a signal or failure to connect.  
@@ -12,22 +15,8 @@
  * Return value:
  *  0 upon successful termination.  -1 upon socket connection failure.
  */
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <syslog.h>
-#include <errno.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <signal.h>
 
-#define S_PORT "9000"
-#define FILENAME "/var/tmp/aesdsocketdata"
-#define BACKLOG 5 //beej.us/guide/bgnet recommends 5 as number in backlog
-#define MAX_BUF_SIZE 20 //just to buffer
+#include "aesdsocket.h"
 
 char host[NI_MAXHOST];
 int caught_sig = 0;
@@ -48,16 +37,25 @@ static void signal_handler( int sn ) {
  * Description: writes packet to end of file
  *   specifically handles errors in writing
  * Input:
- *  fd = file descriptor of output file
  *  data = address of data to write
  *  len = length of the data to write
+ *  m = mutext to control file access
  * Output: -1 if error, 0 if success
  */
-int file_write(int fd, char* data, ssize_t len) {
+int file_write(char* data, ssize_t len, pthread_mutex_t* m) {
 	int result;
+	
+	//try to lock
+	result = pthread_mutex_lock(m);
+	//if(result != 0) success = false; WHAT TO DO UPON FAILURE?
 	
 	//write data to file
 	ssize_t rc = write(fd, data, len);
+	
+	//unlock
+	result = pthread_mutex_unlock(m);
+	//log error?
+	
 	if(rc == -1) { //failure to write!
 		syslog(LOG_ERR, "Failed to file write:%m\n");
 		result = -1;
@@ -75,11 +73,10 @@ int file_write(int fd, char* data, ssize_t len) {
  * Description: sends a portion of the file at a time (defined by MAX_BUF_SIZE)
  * Input: 
  *  socket = the socket to echo the file to
- *  fd = file descriptor for the file to be read
  * Output:
  *  -1 if error, 0 if successful
  */
-int send_line(int socket, int fd) {
+int send_line(int socket) {
 	char read_buf[MAX_BUF_SIZE];
 	off_t cur_off = 0;
 	
@@ -126,11 +123,11 @@ int send_line(int socket, int fd) {
  *  writes the data out to specified file
  * Inputs: 
  *  socket = socket file descriptor to read data from
- *  buffer = malloc'd char* to hold the entire packet
+ *  m = mutex to control file access
  * Output:
  *  result = -1 upon failure, 0 if connection closed, 1 if successful
  */
-int read_packet(int socket, int fd) {
+int read_packet(int socket, pthread_mutex_t* m) {
 	int result;
 	char read_buf[MAX_BUF_SIZE];
 	
@@ -186,7 +183,7 @@ int read_packet(int socket, int fd) {
 	//only write packet upon successful read
 	if(result == 1) {
 		//write buffer to file
-		int num_w = file_write(fd, buffer, bufs);
+		int num_w = file_write(buffer, bufs, m);
 		if(num_w != 0) {
 			syslog(LOG_ERR, "Failed to write to the file\n");
 			result = -1;
@@ -226,7 +223,7 @@ int accept_socket(int sfd) {
  *   sfd = socket file descriptor or -1 upon error
  */ 
 int init_socket() {
-	int sfd = socket(AF_INET, SOCK_STREAM, 0); //create an IPv4 stream(TCP) socket w/ auto protocol
+	int sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); //create an IPv4 stream(TCP) socket w/ auto protocol
 	if(sfd < 0) {
 		syslog(LOG_ERR, "failed to create socket:%m\n");
 		return -1; //return to main with failure to connect
@@ -273,6 +270,52 @@ int init_socket() {
 	return sfd;
 }
 
+/* THREADFUNC 
+ * Description: function called upon accept or thread creation
+ *  This function will 
+ *  - accept packets until the connection is closed.
+ *  - write the packets to the specified file.  
+ *  - echo back the file upon a packet reception.
+ * Input:
+ *  thread_param = pointer to thread_data struct
+ * Output:
+ *  thread_param = pointer to the input or NULL upon failure
+ * Safety:
+ *   This function (and all called inside) is thread safe.
+ */
+void* threadfunc(void* thread_param)
+{
+	//setup threading methods
+	if(!thread_param) {
+		return NULL;
+	}
+	struct thread_data* tdp = (struct thread_data *) thread_param;
+	int success = 1;
+    
+	//continuously read on a socket
+	while(1) {
+		//read full packet
+		int rc = read_packet(tdp->nsfd, tdp->m);
+		if(rc == -1) { //reading/echoing failed in some way
+			syslog(LOG_ERR, "Not reading correctly.\n");
+			success = -1;
+			break;
+		}
+		if(rc == 0) { //connection ended
+			break;
+		}
+		
+		
+		//attempt to echo the file back
+		send_line(tdp->nsfd);
+		
+	} //end of reading packets
+    
+	tdp->complete_flag = success;
+    
+	return thread_param;
+}
+
 int main(int argc, char* argv[]) {
 	int result = 0;
 	
@@ -282,6 +325,15 @@ int main(int argc, char* argv[]) {
 	//open stream bound to port 9000, returns -1 upon failure to connect
 	sfd = init_socket();
 	if(sfd == -1){	
+		result = -1;
+	}
+	
+	//make/open the file for appending and read/write
+	fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR |
+	                                                     S_IRGRP | S_IWGRP | 
+	                                                     S_IROTH | S_IWOTH);
+	if(fd == -1) {
+		syslog(LOG_ERR, "%m\n");
 		result = -1;
 	}
 	
@@ -331,47 +383,96 @@ int main(int argc, char* argv[]) {
 		freopen("/dev/null", "w", stderr);
 	}
 	
-	//make/open the file for appending and read/write
-	int fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR |
-	                                                     S_IRGRP | S_IWGRP | 
-	                                                     S_IROTH | S_IWOTH);
-	if(fd == -1) {
-		syslog(LOG_ERR, "%m\n");
-		result = -1;
-	}
-	
 	//continually accept!
-	int nsfd;
+
+	//create linked list
+	SLIST_HEAD(slisthead, slist_thread_s) head;
+	SLIST_INIT(&head);
+	
 	while(!caught_sig && !result) {
-		nsfd = accept_socket(sfd);
-		if(nsfd == -1) continue;
-		
-		//continuously read on a socket
-		while(1) {
-			//read full packet
-			int rc = read_packet(nsfd, fd);
-			if(rc == -1) { //reading/echoing failed in some way
-				syslog(LOG_ERR, "Not reading correctly.\n");
+		/*------CREATE SOCKET RX THREAD------*/
+		int nsfd = accept_socket(sfd);
+		if(nsfd == 0) { //success
+			//----create a new thread----
+			pthread_t thread;
+	    		pthread_mutex_t mutex;
+	    		pthread_mutex_init(&mutex, NULL); //TODO: should check for failures
+	    		
+	    		//allocate memory for thread_data
+			struct thread_data* td = (struct thread_data*)malloc(sizeof(struct thread_data));
+			if(!td) {
 				result = -1;
-				break;
+				continue;
 			}
-			if(rc == 0) { //connection ended
-				break;
+			//setup arguments
+			td->m = &mutex;
+			td->nsfd = nsfd;
+
+			int rc = pthread_create(&thread, NULL, &threadfunc, td);
+			if(rc != 0) {
+				free(td);
+				result = -1;
+				continue;
 			}
-			
-			
-			//echo the file back
-			send_line(nsfd, fd);
-			
-		} //end of reading packets
+	    		
+			//----add to linked list----
+			slist_thread_t* threadp = malloc(sizeof(slist_thread_t));
+			if(!threadp) { //NO MORE MEMORY
+				void* thread_rtn;
+				pthread_join(thread, &thread_rtn);
+				free(td);
+				result = -1;
+				continue;
+			}
+			threadp->thread = thread;
+			threadp->td = td;
+			SLIST_INSERT_HEAD(&head, threadp, entries);
+		}
 		
-		syslog(LOG_DEBUG, "Closed connection from %s\n", host);
-		close(nsfd); //close accepted socket
-	}
+		/*------MANAGE RUNNING THREADS------*/
+		slist_thread_t* tp = NULL;
+		SLIST_FOREACH(tp, &head, entries) {
+			//check if thread is done
+			if(tp->td->complete_flag) {
+				//remove from linked list
+				SLIST_REMOVE(&head, tp, slist_thread_s, entries);
+				
+				//join thread
+				void* thread_rtn = NULL;
+				int rc = pthread_join(tp->thread, &thread_rtn);
+				if(rc != 0) {
+					syslog(LOG_ERR, "Failed to end thread:%ld\n", tp->thread);
+					result = -1;
+				}
+				
+				//check thread success
+				//TODO check if thread_rtn exists
+				struct thread_data* tdp = (struct thread_data *) thread_rtn;
+				
+				//close the socket
+				syslog(LOG_DEBUG, "Closed connection from %s\n", host);
+				close(tdp->nsfd); //close accepted socket	
+			
+				//free the thread
+				free(tdp);
+				free(tp);
+			}
+			
+		}//end list loop
+	}//end while
 	syslog(LOG_DEBUG, "Caught signal, exiting\n");
+	
+	//free linked list
+	while(!SLIST_EMPTY(&head)) {
+		slist_thread_t* threadp = SLIST_FIRST(&head);
+		SLIST_REMOVE_HEAD(&head, entries);
+		void* thread_rtn;
+		pthread_join(threadp->thread, &thread_rtn);
+		free(thread_rtn);
+		free(threadp);
+	}
 	 
 	close(fd); //close writing file
-	close(nsfd); //try to close accepted socket
 	close(sfd); //close socket
 	
 	unlink(FILENAME);
