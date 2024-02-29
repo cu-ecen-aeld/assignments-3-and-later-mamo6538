@@ -19,6 +19,7 @@
 #include "aesdsocket.h"
 
 char host[NI_MAXHOST];
+int caught_timer = 0;
 int caught_sig = 0;
 int sfd; //make socket global for shutdown
 
@@ -30,6 +31,12 @@ static void signal_handler( int sn ) {
 	if(sn == SIGTERM || sn == SIGINT) {
 		caught_sig = 1;
 		shutdown(sfd, SHUT_RDWR);
+	}
+}
+
+static void timer_handler( int sn ) {
+	if(sn == SIGALRM) {
+		caught_timer = 1;
 	}
 }
 
@@ -275,22 +282,9 @@ int init_socket() {
 	return sfd;
 }
 
-/* THREADFUNC 
- * Description: function called upon accept or thread creation
- *  This function will 
- *  - accept packets until the connection is closed.
- *  - write the packets to the specified file.  
- *  - echo back the file upon a packet reception.
- * Input:
- *  thread_param = pointer to thread_data struct
- * Output:
- *  thread_param = pointer to the input or NULL upon failure
- * Safety:
- *   This function (and all called inside) is thread safe.
- */
 void* threadfunc(void* thread_param)
 {
-	//setup threading methods
+	//setup threading info
 	if(!thread_param) {
 		syslog(LOG_ERR, "Null pointer exception in thread func.\n");
 		return NULL;
@@ -359,6 +353,14 @@ int main(int argc, char* argv[]) {
 		result = -1;
 	}
 	
+	new_act.sa_handler = timer_handler; //setup the signal handling function
+	rc = sigaction(SIGALRM, &new_act, NULL); //register for SIGALRM
+	if(rc != 0) {
+		syslog(LOG_ERR, "Error %d registering for SIGALRM\n", errno);
+		result = -1;
+	}
+	
+	
 	//support -d argument for creating daemon
 	if(argc == 2) {
 		//compare argv[1] with "-d"
@@ -398,7 +400,19 @@ int main(int argc, char* argv[]) {
 	
 	//create single mutex for all threads to share
 	pthread_mutex_t mutex;
-	pthread_mutex_init(&mutex, NULL); //TODO: should check for failures
+	pthread_mutex_init(&mutex, NULL);
+	
+	//setup 10 second timer
+	struct itimerval delay;
+	delay.it_value.tv_sec = 10;
+	delay.it_value.tv_usec = 0;
+	delay.it_interval.tv_sec = 10;
+	delay.it_interval.tv_usec = 0;
+	setitimer(ITIMER_REAL, &delay, NULL);
+	char data[MAX_TIME_SIZE];
+	memset(&data, 0, MAX_TIME_SIZE);
+	time_t rawNow;
+	struct tm* now = (struct tm*)malloc(sizeof(struct tm));;
 	
 	while(!caught_sig && !result) {
 		/*------CREATE SOCKET RX THREAD------*/
@@ -417,6 +431,7 @@ int main(int argc, char* argv[]) {
 			//setup arguments
 			td->m = &mutex;
 			td->nsfd = nsfd;
+			td->complete_flag = 0;
 			
 			//setup linked list element
 			slist_thread_t* threadp = malloc(sizeof(slist_thread_t));
@@ -440,6 +455,29 @@ int main(int argc, char* argv[]) {
 			threadp->thread = thread;
 			threadp->td = td;
 			SLIST_INSERT_HEAD(&head, threadp, entries);
+		}
+		
+		/*------CHECK TIMER------*/
+		if(caught_timer) {
+			caught_timer = 0; //clear it
+			//get now
+			time(&rawNow);
+			now = localtime_r(&rawNow, now);
+			
+			//format timestamp
+			strftime(data, MAX_TIME_SIZE, RFC2822_FORMAT, now);
+
+			rc = pthread_mutex_lock(&mutex);
+			if(rc != 0) {
+				syslog(LOG_ERR, "Failed to lock timestamp\n");
+				result = -1;
+				continue;
+			}
+
+			//write timestamp to file
+			write(fd, data, MAX_TIME_SIZE);
+
+			rc = pthread_mutex_unlock(&mutex);
 		}
 		
 		/*------MANAGE RUNNING THREADS------*/
@@ -482,16 +520,17 @@ int main(int argc, char* argv[]) {
 	}
 	
 	//free linked list
+	void* thread_rtn;
 	while(!SLIST_EMPTY(&head)) {
 		slist_thread_t* threadp = SLIST_FIRST(&head);
 		SLIST_REMOVE_HEAD(&head, entries);
-		void* thread_rtn;
 		pthread_join(threadp->thread, &thread_rtn);
 		free(thread_rtn);
 		free(threadp);
 		threadp = NULL;
 	}
 	
+	free(now);
 	pthread_mutex_destroy(&mutex);
 	 
 	close(fd); //close writing file

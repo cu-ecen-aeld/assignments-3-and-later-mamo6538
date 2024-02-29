@@ -2,6 +2,7 @@
 //Assignment 6 includes:
 #include <pthread.h>
 #include "queue.h"
+#include <sys/time.h>
 //Assignment 5 includes:
 #include <fcntl.h>
 #include <stdio.h>
@@ -20,6 +21,8 @@
 #define FILENAME "/var/tmp/aesdsocketdata"
 #define BACKLOG 5 //beej.us/guide/bgnet recommends 5 as number in backlog
 #define MAX_BUF_SIZE 50 //just to buffer
+#define RFC2822_FORMAT "timestamp:%a, %d %b %Y %T %z\n"
+#define MAX_TIME_SIZE 60
 
 //-------------------------GLOBALS-------------------------
 int fd;
