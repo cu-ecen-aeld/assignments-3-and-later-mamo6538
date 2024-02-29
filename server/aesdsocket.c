@@ -47,14 +47,19 @@ int file_write(char* data, ssize_t len, pthread_mutex_t* m) {
 	
 	//try to lock
 	result = pthread_mutex_lock(m);
-	//if(result != 0) success = false; WHAT TO DO UPON FAILURE?
+	if(result != 0) { //failure
+		syslog(LOG_ERR, "ERROR mutex lock:%d\n", result);
+		return -1;
+	}
 	
 	//write data to file
 	ssize_t rc = write(fd, data, len);
 	
 	//unlock
 	result = pthread_mutex_unlock(m);
-	//log error?
+	if(result != 0) { //failure
+		syslog(LOG_ERR, "ERROR mutex unlock:%d\n", result);
+	}
 	
 	if(rc == -1) { //failure to write!
 		syslog(LOG_ERR, "Failed to file write:%m\n");
@@ -181,7 +186,7 @@ int read_packet(int socket, pthread_mutex_t* m) {
 	}//end while
 	
 	//only write packet upon successful read
-	if(result == 1) {
+	if(result == 1 || result == 0) {
 		//write buffer to file
 		int num_w = file_write(buffer, bufs, m);
 		if(num_w != 0) {
@@ -223,7 +228,7 @@ int accept_socket(int sfd) {
  *   sfd = socket file descriptor or -1 upon error
  */ 
 int init_socket() {
-	int sfd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0); //create an IPv4 stream(TCP) socket w/ auto protocol
+	int sfd = socket(AF_INET, SOCK_STREAM, 0); //create an IPv4 stream(TCP) socket w/ auto protocol
 	if(sfd < 0) {
 		syslog(LOG_ERR, "failed to create socket:%m\n");
 		return -1; //return to main with failure to connect
@@ -287,6 +292,7 @@ void* threadfunc(void* thread_param)
 {
 	//setup threading methods
 	if(!thread_param) {
+		syslog(LOG_ERR, "Null pointer exception in thread func.\n");
 		return NULL;
 	}
 	struct thread_data* tdp = (struct thread_data *) thread_param;
@@ -305,9 +311,10 @@ void* threadfunc(void* thread_param)
 			break;
 		}
 		
-		
+		syslog(LOG_DEBUG,"Read packet.\n");
 		//attempt to echo the file back
 		send_line(tdp->nsfd);
+		syslog(LOG_DEBUG,"sent back file.\n");
 		
 	} //end of reading packets
     
@@ -320,7 +327,7 @@ int main(int argc, char* argv[]) {
 	int result = 0;
 	
 	//setup syslog
-	openlog("assignment_5_1_", 0, LOG_USER);
+	openlog("assignment_6_1_", 0, LOG_USER);
 	
 	//open stream bound to port 9000, returns -1 upon failure to connect
 	sfd = init_socket();
@@ -389,41 +396,47 @@ int main(int argc, char* argv[]) {
 	SLIST_HEAD(slisthead, slist_thread_s) head;
 	SLIST_INIT(&head);
 	
+	//create single mutex for all threads to share
+	pthread_mutex_t mutex;
+	pthread_mutex_init(&mutex, NULL); //TODO: should check for failures
+	
 	while(!caught_sig && !result) {
 		/*------CREATE SOCKET RX THREAD------*/
 		int nsfd = accept_socket(sfd);
-		if(nsfd == 0) { //success
+		if(nsfd != -1) { //success
 			//----create a new thread----
 			pthread_t thread;
-	    		pthread_mutex_t mutex;
-	    		pthread_mutex_init(&mutex, NULL); //TODO: should check for failures
 	    		
 	    		//allocate memory for thread_data
 			struct thread_data* td = (struct thread_data*)malloc(sizeof(struct thread_data));
 			if(!td) {
+				syslog(LOG_ERR, "Failed to allocate thread_data.\n");
 				result = -1;
 				continue;
 			}
 			//setup arguments
 			td->m = &mutex;
 			td->nsfd = nsfd;
+			
+			//setup linked list element
+			slist_thread_t* threadp = malloc(sizeof(slist_thread_t));
+			if(!threadp) { //NO MORE MEMORY
+				syslog(LOG_ERR, "Failed to allocate ll element.\n");
+				free(td);
+				result = -1;
+				continue;
+			}
 
 			int rc = pthread_create(&thread, NULL, &threadfunc, td);
 			if(rc != 0) {
+				syslog(LOG_ERR, "Failed to create thread.\n");
 				free(td);
+				free(threadp);
 				result = -1;
 				continue;
 			}
 	    		
 			//----add to linked list----
-			slist_thread_t* threadp = malloc(sizeof(slist_thread_t));
-			if(!threadp) { //NO MORE MEMORY
-				void* thread_rtn;
-				pthread_join(thread, &thread_rtn);
-				free(td);
-				result = -1;
-				continue;
-			}
 			threadp->thread = thread;
 			threadp->td = td;
 			SLIST_INSERT_HEAD(&head, threadp, entries);
@@ -431,7 +444,8 @@ int main(int argc, char* argv[]) {
 		
 		/*------MANAGE RUNNING THREADS------*/
 		slist_thread_t* tp = NULL;
-		SLIST_FOREACH(tp, &head, entries) {
+		slist_thread_t* next = NULL;
+		SLIST_FOREACH_SAFE(tp, &head, entries, next) {
 			//check if thread is done
 			if(tp->td->complete_flag) {
 				//remove from linked list
@@ -446,7 +460,8 @@ int main(int argc, char* argv[]) {
 				}
 				
 				//check thread success
-				//TODO check if thread_rtn exists
+				if(!thread_rtn) //failure
+					syslog(LOG_ERR, "threadfunc failed.\n");
 				struct thread_data* tdp = (struct thread_data *) thread_rtn;
 				
 				//close the socket
@@ -462,6 +477,10 @@ int main(int argc, char* argv[]) {
 	}//end while
 	syslog(LOG_DEBUG, "Caught signal, exiting\n");
 	
+	if(result == -1) {
+		close(sfd);
+	}
+	
 	//free linked list
 	while(!SLIST_EMPTY(&head)) {
 		slist_thread_t* threadp = SLIST_FIRST(&head);
@@ -470,7 +489,10 @@ int main(int argc, char* argv[]) {
 		pthread_join(threadp->thread, &thread_rtn);
 		free(thread_rtn);
 		free(threadp);
+		threadp = NULL;
 	}
+	
+	pthread_mutex_destroy(&mutex);
 	 
 	close(fd); //close writing file
 	close(sfd); //close socket

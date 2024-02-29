@@ -19,7 +19,7 @@
 #define S_PORT "9000"
 #define FILENAME "/var/tmp/aesdsocketdata"
 #define BACKLOG 5 //beej.us/guide/bgnet recommends 5 as number in backlog
-#define MAX_BUF_SIZE 20 //just to buffer
+#define MAX_BUF_SIZE 50 //just to buffer
 
 //-------------------------GLOBALS-------------------------
 int fd;
