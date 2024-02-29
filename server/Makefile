@@ -1,6 +1,6 @@
 CC ?= $(CROSS_COMPILER)gcc
 CFLAGS ?= -g -Wall -Werror
-LDFLAGS ?= -pthread -lpthread
+LDFLAGS ?= -pthread -lrt
 TARGET ?= aesdsocket
 
 all: aesdsocket
