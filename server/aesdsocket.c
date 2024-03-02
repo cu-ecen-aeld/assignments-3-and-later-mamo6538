@@ -465,6 +465,7 @@ int main(int argc, char* argv[]) {
 			now = localtime_r(&rawNow, now);
 			
 			//format timestamp
+			memset(&data, 0, MAX_TIME_SIZE);
 			strftime(data, MAX_TIME_SIZE, RFC2822_FORMAT, now);
 
 			rc = pthread_mutex_lock(&mutex);
@@ -475,7 +476,7 @@ int main(int argc, char* argv[]) {
 			}
 
 			//write timestamp to file
-			write(fd, data, MAX_TIME_SIZE);
+			write(fd, data, strlen(data));
 
 			rc = pthread_mutex_unlock(&mutex);
 		}
