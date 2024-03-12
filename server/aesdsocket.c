@@ -330,9 +330,7 @@ int main(int argc, char* argv[]) {
 	}
 	
 	//make/open the file for appending and read/write
-	fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR |
-	                                                     S_IRGRP | S_IWGRP | 
-	                                                     S_IROTH | S_IWOTH);
+	fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, 00666);
 	if(fd == -1) {
 		syslog(LOG_ERR, "%m\n");
 		result = -1;
