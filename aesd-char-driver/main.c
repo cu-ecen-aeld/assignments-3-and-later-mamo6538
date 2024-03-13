@@ -21,7 +21,7 @@
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
-MODULE_AUTHOR("Your Name Here"); /** TODO: fill in your name **/
+MODULE_AUTHOR("Madeleine Monfort");
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
@@ -102,9 +102,15 @@ int aesd_init_module(void)
     }
     memset(&aesd_device,0,sizeof(struct aesd_dev));
 
-    /**
-     * TODO: initialize the AESD specific portion of the device
-     */
+     //init circular buffer dynamically
+     aesd_device.cbuf = kmalloc(sizeof(struct aesd_circular_buffer), GFP_KERNEL);
+     aesd_circular_buffer_init(aesd_device.cbuf);
+     
+     //init the entry dynamically
+     aesd_device.current_command = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
+     
+     //init the mutex dynamically
+     mutex_init(&aesd_device.lock_cbuf);
 
     result = aesd_setup_cdev(&aesd_device);
 
@@ -121,9 +127,18 @@ void aesd_cleanup_module(void)
 
     cdev_del(&aesd_device.cdev);
 
-    /**
-     * TODO: cleanup AESD specific poritions here as necessary
-     */
+    //free the circular buffer
+    uint8_t index;
+    struct aesd_buffer_entry *entry;
+    AESD_CIRCULAR_BUFFER_FOREACH(entry,aesd_device.cbuf,index) {
+        kfree(entry->buffptr);
+    }
+    kfree(aesd_device.cbuf);
+    
+    //free the entry
+    kfree(aesd_device.current_command);
+    
+    //release the mutex?
 
     unregister_chrdev_region(devno, 1);
 }
