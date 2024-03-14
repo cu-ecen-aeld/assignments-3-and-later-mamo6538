@@ -25,23 +25,29 @@ int aesd_minor =   0;
 MODULE_AUTHOR("Madeleine Monfort");
 MODULE_LICENSE("Dual BSD/GPL");
 
-struct aesd_dev aesd_device;
+struct aesd_dev aesd_device; //allocated in init function
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
     PDEBUG("open");
-    /**
-     * TODO: handle open
-     */
+    //could check for errors
+    //if(!inode || !filp)?
+    //no hardware to cause errors
+    
+    //use container_of to find the aesd_dev from the inode's cdev field
+    struct aesd_dev* dev;
+    dev = container_of(inode->i_cdev, struct aesd_dev, cdev);
+    
+    //set the file pointer to the aesd_dev struct found from the inode
+    filp->private_data = dev;
+    
     return 0;
 }
 
 int aesd_release(struct inode *inode, struct file *filp)
 {
     PDEBUG("release");
-    /**
-     * TODO: handle release
-     */
+    //shouldn't need to do anything since I didn't malloc in open
     return 0;
 }
 
@@ -50,9 +56,49 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 {
     ssize_t retval = 0;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
-    /**
-     * TODO: handle read
-     */
+    
+    if(count == 0) goto end;
+    
+    //get the circular buffer (get device struct)
+    struct aesd_dev* dev = filp->private_data;
+    struct aesd_circular_buffer* cbuf = dev->cbuf;
+    
+    //get entry at fpos
+    size_t entry_bytes_read = 0;
+    struct aesd_buffer_entry* entry = aesd_circular_buffer_find_entry_offset_for_fpos(cbuf, *f_pos, &entry_bytes_read);
+    //do error checking
+    if(!entry) {
+        retval = -EFAULT; //?
+        goto end;
+    }
+    if(entry_bytes_read == 0) {
+        retval = 0;
+        goto end;
+    }
+    
+    
+    //do size math
+    size_t new_size = count; //if count is <= entry_bytes_read
+    if(count > entry_bytes_read)
+        new_size = entry_bytes_read;
+    
+    //copy data to user (up to count)
+    char* tmp_ptr = entry->buffptr;
+    size_t new_offset = entry->size - count;
+    tmp_ptr = tmp_ptr + new_offset;
+    if(copy_to_user(buf, tmp_ptr, new_size)) {
+        retval = -EFAULT;
+        goto end;
+    }
+    
+    //update fpos
+    *f_pos += new_size;
+    
+    //update retval
+    retval = new_size;
+    
+end:
+    PDEBUG("read: fpos=%lld, retval=%d", *f_pos, retval);
     return retval;
 }
 
@@ -61,9 +107,47 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 {
     ssize_t retval = -ENOMEM;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
-    /**
-     * TODO: handle write
-     */
+    
+    //get the circular buffer (get device struct)
+    struct aesd_dev* dev = filp->private_data;
+    struct aesd_circular_buffer* cbuf = dev->cbuf;
+    
+    //create an entry
+    struct aesd_buffer_entry entry;
+    
+    //fill the entry
+    entry.size = count;
+    char* command_buf = kmalloc(count, GFP_KERNEL); //need to set up the buffer for the command
+    if(!command_buf) {
+        retval = -ENOMEM;
+        goto end;
+    }
+    
+    if(copy_from_user(command_buf, buf, count)) { //!= 0
+        retval = -EFAULT;
+        goto fail_fill;
+    }
+    entry.buffptr = command_buf;
+    retval = count;
+    
+    //handle overwriting freeing
+    if(cbuf->full) {
+        uint8_t index = cbuf->in_offs;
+        struct aesd_buffer_entry* e_overwrite = &(cbuf->entry[index]);
+        if(e_overwrite) {
+            kfree(e_overwrite->buffptr);
+        }
+    }
+    
+    //perform a write operation on cbuf
+    aesd_circular_buffer_add_entry(cbuf, &entry);
+    
+    goto end;
+    
+
+fail_fill:
+    kfree(command_buf);
+end:
     return retval;
 }
 struct file_operations aesd_fops = {
@@ -105,10 +189,12 @@ int aesd_init_module(void)
 
      //init circular buffer dynamically
      aesd_device.cbuf = kmalloc(sizeof(struct aesd_circular_buffer), GFP_KERNEL);
+       //check failure
      aesd_circular_buffer_init(aesd_device.cbuf);
      
      //init the entry dynamically
      aesd_device.current_command = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
+       //check failure
      
      //init the mutex dynamically
      mutex_init(&aesd_device.lock_cbuf);
@@ -129,9 +215,10 @@ void aesd_cleanup_module(void)
     cdev_del(&aesd_device.cdev);
 
     //free the circular buffer
-    uint8_t index;
+    uint8_t index = 0;
     struct aesd_buffer_entry *entry;
     AESD_CIRCULAR_BUFFER_FOREACH(entry,aesd_device.cbuf,index) {
+        //free each entry and it's pointers
         kfree(entry->buffptr);
     }
     kfree(aesd_device.cbuf);
