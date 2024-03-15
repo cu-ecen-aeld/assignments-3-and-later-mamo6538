@@ -64,28 +64,22 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     struct aesd_circular_buffer* cbuf = dev->cbuf;
     
     //get entry at fpos
-    size_t entry_bytes_read = 0;
-    struct aesd_buffer_entry* entry = aesd_circular_buffer_find_entry_offset_for_fpos(cbuf, *f_pos, &entry_bytes_read);
+    size_t entry_pos = 0;
+    struct aesd_buffer_entry* entry = aesd_circular_buffer_find_entry_offset_for_fpos(cbuf, *f_pos, &entry_pos);
     //do error checking
     if(!entry) {
-        retval = -EFAULT; //?
+        retval = 0; //end of file reached
         goto end;
     }
-    if(entry_bytes_read == 0) {
-        retval = 0;
-        goto end;
-    }
-    
-    
+    PDEBUG("read: epos=%ld, size=%ld", entry_pos, entry->size);
     //do size math
-    size_t new_size = count; //if count is <= entry_bytes_read
-    if(count > entry_bytes_read)
-        new_size = entry_bytes_read;
+    size_t new_size = entry->size - entry_pos; 
+    if(count < new_size)
+        new_size = count;
     
-    //copy data to user (up to count)
+    //copy data to user
     char* tmp_ptr = entry->buffptr;
-    size_t new_offset = entry->size - count;
-    tmp_ptr = tmp_ptr + new_offset;
+    tmp_ptr = tmp_ptr + entry_pos;
     if(copy_to_user(buf, tmp_ptr, new_size)) {
         retval = -EFAULT;
         goto end;
@@ -98,7 +92,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     retval = new_size;
     
 end:
-    PDEBUG("read: fpos=%lld, retval=%d", *f_pos, retval);
+    PDEBUG("read: fpos=%lld, retval=%ld", *f_pos, retval);
     return retval;
 }
 
