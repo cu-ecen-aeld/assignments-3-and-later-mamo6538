@@ -27,7 +27,7 @@
 struct aesd_dev
 {
     struct aesd_circular_buffer* cbuf; //the circular buffer
-    struct aesd_buffer_entry* current_command; //for handling appended writes
+    struct aesd_buffer_entry current_command; //for handling appended writes
     struct mutex lock_cbuf;
     struct cdev cdev;     /* Char device structure      */
 };

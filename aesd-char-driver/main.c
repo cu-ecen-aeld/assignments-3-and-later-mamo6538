@@ -71,7 +71,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         retval = 0; //end of file reached
         goto end;
     }
-    PDEBUG("read: epos=%ld, size=%ld", entry_pos, entry->size);
+
     //do size math
     size_t new_size = entry->size - entry_pos; 
     if(count < new_size)
@@ -105,36 +105,54 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     //get the circular buffer (get device struct)
     struct aesd_dev* dev = filp->private_data;
     struct aesd_circular_buffer* cbuf = dev->cbuf;
+    struct aesd_buffer_entry cc = dev->current_command;
     
-    //create an entry
-    struct aesd_buffer_entry entry;
+    //grab end of previous command
+    size_t old_pos = cc.size;
     
-    //fill the entry
-    entry.size = count;
-    char* command_buf = kmalloc(count, GFP_KERNEL); //need to set up the buffer for the command
+    //update the current command entry
+    cc.size += count;
+    PDEBUG("write: old size=%ld new=%ld",old_pos,cc.size);
+    //temp command
+    char* command_buf = krealloc(cc.buffptr, cc.size, GFP_KERNEL); //need to set up the buffer for the command
     if(!command_buf) {
         retval = -ENOMEM;
         goto end;
     }
+    //mem handling
+    cc.buffptr = command_buf;
+    
+    //find new location
+    command_buf += old_pos;
     
     if(copy_from_user(command_buf, buf, count)) { //!= 0
         retval = -EFAULT;
         goto fail_fill;
     }
-    entry.buffptr = command_buf;
-    retval = count;
     
-    //handle overwriting freeing
-    if(cbuf->full) {
-        uint8_t index = cbuf->in_offs;
-        struct aesd_buffer_entry* e_overwrite = &(cbuf->entry[index]);
-        if(e_overwrite) {
-            kfree(e_overwrite->buffptr);
+    //check if cc was full command (end in '\n')
+    command_buf = cc.buffptr + cc.size - 1;
+    PDEBUG("write: ptr old=%p, ptr new=%p", cc.buffptr, command_buf);
+    if(*command_buf == '\n') {
+        //handle overwriting freeing
+        if(cbuf->full) {
+            uint8_t index = cbuf->in_offs;
+            struct aesd_buffer_entry* e_overwrite = &(cbuf->entry[index]);
+            if(e_overwrite) {
+                kfree(e_overwrite->buffptr);
+            }
         }
+        
+        //perform a write operation on cbuf
+        aesd_circular_buffer_add_entry(cbuf, &cc);
+      
+        //reset the current command
+        dev->current_command.buffptr = NULL;
+        dev->current_command.size = 0;
     }
+    else dev->current_command = cc;
     
-    //perform a write operation on cbuf
-    aesd_circular_buffer_add_entry(cbuf, &entry);
+    retval = count;
     
     goto end;
     
@@ -183,12 +201,21 @@ int aesd_init_module(void)
 
      //init circular buffer dynamically
      aesd_device.cbuf = kmalloc(sizeof(struct aesd_circular_buffer), GFP_KERNEL);
-       //check failure
+     if(!aesd_device.cbuf) {
+        result = -EFAULT;
+        return result; 
+     }
      aesd_circular_buffer_init(aesd_device.cbuf);
      
-     //init the entry dynamically
-     aesd_device.current_command = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
-       //check failure
+     //init the entry's pointer dynamically to random default
+     /*aesd_device.current_command.buffptr = kmalloc(3, GFP_KERNEL);
+     if(!aesd_device.current_command.buffptr) {
+        result = -EFAULT;
+        kfree(aesd_device.cbuf);
+        return result; 
+     }
+     //init to 0s
+     memset(aesd_device.current_command.buffptr,0,3);*/
      
      //init the mutex dynamically
      mutex_init(&aesd_device.lock_cbuf);
@@ -217,8 +244,8 @@ void aesd_cleanup_module(void)
     }
     kfree(aesd_device.cbuf);
     
-    //free the entry
-    kfree(aesd_device.current_command);
+    //free the entry if it exists
+    //kfree(aesd_device.current_command.buffptr);
     
     //release the mutex?
 
