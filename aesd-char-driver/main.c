@@ -30,9 +30,6 @@ struct aesd_dev aesd_device; //allocated in init function
 int aesd_open(struct inode *inode, struct file *filp)
 {
     PDEBUG("open");
-    //could check for errors
-    //if(!inode || !filp)?
-    //no hardware to cause errors
     
     //use container_of to find the aesd_dev from the inode's cdev field
     struct aesd_dev* dev;
@@ -114,13 +111,15 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     cc.size += count;
     PDEBUG("write: old size=%ld new=%ld",old_pos,cc.size);
     //temp command
+    mutex_lock(&dev->lock_cc);
     char* command_buf = krealloc(cc.buffptr, cc.size, GFP_KERNEL); //need to set up the buffer for the command
+    mutex_unlock(&dev->lock_cc);
     if(!command_buf) {
         retval = -ENOMEM;
         goto end;
     }
     //mem handling
-    cc.buffptr = command_buf;
+    char* tmp_ptr = command_buf;
     
     //find new location
     command_buf += old_pos;
@@ -131,8 +130,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     }
     
     //check if cc was full command (end in '\n')
-    command_buf = cc.buffptr + cc.size - 1;
-    PDEBUG("write: ptr old=%p, ptr new=%p", cc.buffptr, command_buf);
+    command_buf = tmp_ptr + cc.size - 1;
     if(*command_buf == '\n') {
         //handle overwriting freeing
         if(cbuf->full) {
@@ -142,15 +140,23 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 kfree(e_overwrite->buffptr);
             }
         }
-        
+        mutex_lock(&dev->lock_cbuf);
         //perform a write operation on cbuf
+        cc.buffptr = tmp_ptr;
         aesd_circular_buffer_add_entry(cbuf, &cc);
       
         //reset the current command
         dev->current_command.buffptr = NULL;
         dev->current_command.size = 0;
+        
+        mutex_unlock(&dev->lock_cbuf);
     }
-    else dev->current_command = cc;
+    else {
+        mutex_lock(&dev->lock_cc);
+        cc.buffptr = tmp_ptr;
+        dev->current_command = cc;
+        mutex_unlock(&dev->lock_cc);
+    }
     
     retval = count;
     
@@ -207,18 +213,9 @@ int aesd_init_module(void)
      }
      aesd_circular_buffer_init(aesd_device.cbuf);
      
-     //init the entry's pointer dynamically to random default
-     /*aesd_device.current_command.buffptr = kmalloc(3, GFP_KERNEL);
-     if(!aesd_device.current_command.buffptr) {
-        result = -EFAULT;
-        kfree(aesd_device.cbuf);
-        return result; 
-     }
-     //init to 0s
-     memset(aesd_device.current_command.buffptr,0,3);*/
-     
      //init the mutex dynamically
      mutex_init(&aesd_device.lock_cbuf);
+     mutex_init(&aesd_device.lock_cc);
 
     result = aesd_setup_cdev(&aesd_device);
 
@@ -245,7 +242,8 @@ void aesd_cleanup_module(void)
     kfree(aesd_device.cbuf);
     
     //free the entry if it exists
-    //kfree(aesd_device.current_command.buffptr);
+    if(aesd_device.current_command.size > 0)
+        kfree(aesd_device.current_command.buffptr);
     
     //release the mutex?
 
