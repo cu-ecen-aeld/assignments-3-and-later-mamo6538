@@ -321,7 +321,7 @@ int main(int argc, char* argv[]) {
 	int result = 0;
 	
 	//setup syslog
-	openlog("assignment_6_1_", 0, LOG_USER);
+	openlog("assignment_8", 0, LOG_USER);
 	
 	//open stream bound to port 9000, returns -1 upon failure to connect
 	sfd = init_socket();
@@ -330,9 +330,12 @@ int main(int argc, char* argv[]) {
 	}
 	
 	//make/open the file for appending and read/write
-	fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, 00666);
+	if(USE_AESD_CHAR_DEVICE)
+		fd = open(FILENAME, O_RDWR | O_APPEND);
+	else 
+		fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, 00666);
 	if(fd == -1) {
-		syslog(LOG_ERR, "%m\n");
+		syslog(LOG_ERR, "ERROR opening file:%m\n");
 		result = -1;
 	}
 	
@@ -351,11 +354,13 @@ int main(int argc, char* argv[]) {
 		result = -1;
 	}
 	
-	new_act.sa_handler = timer_handler; //setup the signal handling function
-	rc = sigaction(SIGALRM, &new_act, NULL); //register for SIGALRM
-	if(rc != 0) {
-		syslog(LOG_ERR, "Error %d registering for SIGALRM\n", errno);
-		result = -1;
+	if(!USE_AESD_CHAR_DEVICE) {
+		new_act.sa_handler = timer_handler; //setup the signal handling function
+		rc = sigaction(SIGALRM, &new_act, NULL); //register for SIGALRM
+		if(rc != 0) {
+			syslog(LOG_ERR, "Error %d registering for SIGALRM\n", errno);
+			result = -1;
+		}
 	}
 	
 	
@@ -402,15 +407,17 @@ int main(int argc, char* argv[]) {
 	
 	//setup 10 second timer
 	struct itimerval delay;
-	delay.it_value.tv_sec = 10;
-	delay.it_value.tv_usec = 0;
-	delay.it_interval.tv_sec = 10;
-	delay.it_interval.tv_usec = 0;
-	setitimer(ITIMER_REAL, &delay, NULL);
 	char data[MAX_TIME_SIZE];
-	memset(&data, 0, MAX_TIME_SIZE);
 	time_t rawNow;
-	struct tm* now = (struct tm*)malloc(sizeof(struct tm));;
+	struct tm* now = (struct tm*)malloc(sizeof(struct tm));
+	if(!USE_AESD_CHAR_DEVICE) {
+		delay.it_value.tv_sec = 10;
+		delay.it_value.tv_usec = 0;
+		delay.it_interval.tv_sec = 10;
+		delay.it_interval.tv_usec = 0;
+		setitimer(ITIMER_REAL, &delay, NULL);
+		memset(&data, 0, MAX_TIME_SIZE);
+	}
 	
 	while(!caught_sig && !result) {
 		/*------CREATE SOCKET RX THREAD------*/
@@ -529,13 +536,15 @@ int main(int argc, char* argv[]) {
 		threadp = NULL;
 	}
 	
+	syslog(LOG_DEBUG, "Made it through the threads.\n");
+	
 	free(now);
 	pthread_mutex_destroy(&mutex);
 	 
 	close(fd); //close writing file
 	close(sfd); //close socket
 	
-	unlink(FILENAME);
+	if(!USE_AESD_CHAR_DEVICE) unlink(FILENAME); //remove file
 	closelog();
 	return result;
 }

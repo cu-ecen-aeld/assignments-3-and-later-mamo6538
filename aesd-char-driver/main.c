@@ -99,6 +99,12 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     ssize_t retval = -ENOMEM;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
     
+    //error correction
+    if(count <= 0) {
+        retval = -EFAULT;
+        goto end;
+    }
+    
     //get the circular buffer (get device struct)
     struct aesd_dev* dev = filp->private_data;
     struct aesd_circular_buffer* cbuf = dev->cbuf;

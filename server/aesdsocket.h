@@ -1,3 +1,6 @@
+
+#ifndef AESDSOCKET_H_
+#define AESDSOCKET_H_
 //-------------------------INCLUDES-------------------------
 //Assignment 6 includes:
 #include <pthread.h>
@@ -18,11 +21,22 @@
 
 //-------------------------DEFINES-------------------------
 #define S_PORT "9000"
-#define FILENAME "/var/tmp/aesdsocketdata"
+
 #define BACKLOG 5 //beej.us/guide/bgnet recommends 5 as number in backlog
 #define MAX_BUF_SIZE 50 //just to buffer
 #define RFC2822_FORMAT "timestamp:%a, %d %b %Y %T %z\n"
 #define MAX_TIME_SIZE 60
+
+#define USE_AESD_CHAR_DEVICE 1
+
+#undef FILENAME             /* undef it, just in case */
+#if USE_AESD_CHAR_DEVICE
+#    define FILENAME "/dev/aesdchar"
+#else
+     /* This one for user space */
+#    define FILENAME "/var/tmp/aesdsocketdata"
+#endif
+
 
 //-------------------------GLOBALS-------------------------
 int fd;
@@ -63,3 +77,5 @@ struct slist_thread_s {
  *   This function (and all called inside) is thread safe.
  */
 void* threadfunc(void* thread_param);
+
+#endif /* AESDSOCKET_H_ */
