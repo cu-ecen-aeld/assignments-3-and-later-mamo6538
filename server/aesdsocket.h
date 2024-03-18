@@ -39,7 +39,10 @@
 
 
 //-------------------------GLOBALS-------------------------
-int fd;
+char host[NI_MAXHOST];
+int caught_timer = 0;
+int caught_sig = 0;
+int sfd; //make socket global for shutdown
 
 //-------------------------STRUCTS-------------------------
 /**
@@ -51,6 +54,7 @@ int fd;
 struct thread_data{
 	pthread_mutex_t* m;
 	int nsfd; //file descriptor for the socket
+	int fd; //file descriptor for the written file
 	int complete_flag; //1 if success, -1 if failure, 0 if not complete
 };
 
