@@ -37,6 +37,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     //find out which entry the char is in
     size_t total_s = 0;
     uint8_t i = buffer->out_offs; //go from out_offs to in_offs
+    uint8_t s = buffer->in_offs;
     struct aesd_buffer_entry *entry;
     bool isDone = false;
     //need do-while for full (offsets equal)
@@ -56,7 +57,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
             i = 0;
         else 
             i++;
-    } while( i != buffer->in_offs);
+    } while( i != s);
     
     //check for failure
     if(!isDone)
@@ -81,25 +82,30 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
 {
     //set the add_entry to the in offset
     uint8_t in_temp = buffer->in_offs;
+    uint8_t out_temp = buffer->out_offs;
     buffer->entry[in_temp] = *add_entry;
     
     if(buffer->full) {
-        buffer->out_offs = buffer->out_offs + 1;
+        out_temp = out_temp + 1;
     }
     
     //increase the in offset
-    buffer->in_offs = in_temp + 1;
+    in_temp = in_temp + 1;
     
     //ensure in wraps back around
-    if(buffer->in_offs >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
-        buffer->in_offs = 0;
+    if(in_temp >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+        in_temp = 0;
     
-    if(buffer->out_offs >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
-        buffer->out_offs = 0;
+    if(out_temp >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+        out_temp = 0;
     
     //determine if full
-    if(buffer->in_offs == buffer->out_offs)
+    if(in_temp == out_temp)
         buffer->full = true;
+        
+    //set the offsets
+    buffer->in_offs = in_temp;
+    buffer->out_offs = out_temp;
 }
 
 /**

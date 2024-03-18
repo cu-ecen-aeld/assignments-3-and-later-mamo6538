@@ -18,11 +18,6 @@
 
 #include "aesdsocket.h"
 
-char host[NI_MAXHOST];
-int caught_timer = 0;
-int caught_sig = 0;
-int sfd; //make socket global for shutdown
-
 //function: signal handler
 // to handle the SIGINT and SIGTERM signals
 // force exit from main while loop
@@ -44,12 +39,13 @@ static void timer_handler( int sn ) {
  * Description: writes packet to end of file
  *   specifically handles errors in writing
  * Input:
+ *  fd = file descriptor
  *  data = address of data to write
  *  len = length of the data to write
  *  m = mutext to control file access
  * Output: -1 if error, 0 if success
  */
-int file_write(char* data, ssize_t len, pthread_mutex_t* m) {
+int file_write(int fd, char* data, ssize_t len, pthread_mutex_t* m) {
 	int result;
 	
 	//try to lock
@@ -85,10 +81,11 @@ int file_write(char* data, ssize_t len, pthread_mutex_t* m) {
  * Description: sends a portion of the file at a time (defined by MAX_BUF_SIZE)
  * Input: 
  *  socket = the socket to echo the file to
+ *  fd = file descriptor
  * Output:
  *  -1 if error, 0 if successful
  */
-int send_line(int socket) {
+int send_line(int socket, int fd) {
 	char read_buf[MAX_BUF_SIZE];
 	off_t cur_off = 0;
 	
@@ -135,11 +132,12 @@ int send_line(int socket) {
  *  writes the data out to specified file
  * Inputs: 
  *  socket = socket file descriptor to read data from
+ *  fd = file descriptor of specified file
  *  m = mutex to control file access
  * Output:
  *  result = -1 upon failure, 0 if connection closed, 1 if successful
  */
-int read_packet(int socket, pthread_mutex_t* m) {
+int read_packet(int socket, int fd, pthread_mutex_t* m) {
 	int result;
 	char read_buf[MAX_BUF_SIZE];
 	
@@ -195,7 +193,7 @@ int read_packet(int socket, pthread_mutex_t* m) {
 	//only write packet upon successful read
 	if(result == 1 || result == 0) {
 		//write buffer to file
-		int num_w = file_write(buffer, bufs, m);
+		int num_w = file_write(fd, buffer, bufs, m);
 		if(num_w != 0) {
 			syslog(LOG_ERR, "Failed to write to the file\n");
 			result = -1;
@@ -295,7 +293,7 @@ void* threadfunc(void* thread_param)
 	//continuously read on a socket
 	while(1) {
 		//read full packet
-		int rc = read_packet(tdp->nsfd, tdp->m);
+		int rc = read_packet(tdp->nsfd, tdp->fd, tdp->m);
 		if(rc == -1) { //reading/echoing failed in some way
 			syslog(LOG_ERR, "Not reading correctly.\n");
 			success = -1;
@@ -307,7 +305,7 @@ void* threadfunc(void* thread_param)
 		
 		syslog(LOG_DEBUG,"Read packet.\n");
 		//attempt to echo the file back
-		send_line(tdp->nsfd);
+		send_line(tdp->nsfd, tdp->fd);
 		syslog(LOG_DEBUG,"sent back file.\n");
 		
 	} //end of reading packets
@@ -319,9 +317,10 @@ void* threadfunc(void* thread_param)
 
 int main(int argc, char* argv[]) {
 	int result = 0;
+	int fd;
 	
 	//setup syslog
-	openlog("assignment_6_1_", 0, LOG_USER);
+	openlog("assignment_8", 0, LOG_USER);
 	
 	//open stream bound to port 9000, returns -1 upon failure to connect
 	sfd = init_socket();
@@ -330,10 +329,12 @@ int main(int argc, char* argv[]) {
 	}
 	
 	//make/open the file for appending and read/write
-	fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, 00666);
-	if(fd == -1) {
-		syslog(LOG_ERR, "%m\n");
-		result = -1;
+	if(!USE_AESD_CHAR_DEVICE) {
+		fd = open(FILENAME, O_CREAT | O_RDWR | O_APPEND, 00666);
+		if(fd == -1) {
+			syslog(LOG_ERR, "ERROR opening file:%m\n");
+			result = -1;
+		}
 	}
 	
 	//setup signal handling
@@ -351,11 +352,13 @@ int main(int argc, char* argv[]) {
 		result = -1;
 	}
 	
-	new_act.sa_handler = timer_handler; //setup the signal handling function
-	rc = sigaction(SIGALRM, &new_act, NULL); //register for SIGALRM
-	if(rc != 0) {
-		syslog(LOG_ERR, "Error %d registering for SIGALRM\n", errno);
-		result = -1;
+	if(!USE_AESD_CHAR_DEVICE) {
+		new_act.sa_handler = timer_handler; //setup the signal handling function
+		rc = sigaction(SIGALRM, &new_act, NULL); //register for SIGALRM
+		if(rc != 0) {
+			syslog(LOG_ERR, "Error %d registering for SIGALRM\n", errno);
+			result = -1;
+		}
 	}
 	
 	
@@ -402,15 +405,17 @@ int main(int argc, char* argv[]) {
 	
 	//setup 10 second timer
 	struct itimerval delay;
-	delay.it_value.tv_sec = 10;
-	delay.it_value.tv_usec = 0;
-	delay.it_interval.tv_sec = 10;
-	delay.it_interval.tv_usec = 0;
-	setitimer(ITIMER_REAL, &delay, NULL);
 	char data[MAX_TIME_SIZE];
-	memset(&data, 0, MAX_TIME_SIZE);
 	time_t rawNow;
-	struct tm* now = (struct tm*)malloc(sizeof(struct tm));;
+	struct tm* now = (struct tm*)malloc(sizeof(struct tm));
+	if(!USE_AESD_CHAR_DEVICE) {
+		delay.it_value.tv_sec = 10;
+		delay.it_value.tv_usec = 0;
+		delay.it_interval.tv_sec = 10;
+		delay.it_interval.tv_usec = 0;
+		setitimer(ITIMER_REAL, &delay, NULL);
+		memset(&data, 0, MAX_TIME_SIZE);
+	}
 	
 	while(!caught_sig && !result) {
 		/*------CREATE SOCKET RX THREAD------*/
@@ -418,6 +423,14 @@ int main(int argc, char* argv[]) {
 		if(nsfd != -1) { //success
 			//----create a new thread----
 			pthread_t thread;
+			
+			if(USE_AESD_CHAR_DEVICE) {
+				fd = open(FILENAME, O_RDWR);
+				if(fd == -1) {
+					syslog(LOG_ERR, "ERROR opening file:%m\n");
+					result = -1;
+				}
+			}
 	    		
 	    		//allocate memory for thread_data
 			struct thread_data* td = (struct thread_data*)malloc(sizeof(struct thread_data));
@@ -429,6 +442,7 @@ int main(int argc, char* argv[]) {
 			//setup arguments
 			td->m = &mutex;
 			td->nsfd = nsfd;
+			td->fd = fd;
 			td->complete_flag = 0;
 			
 			//setup linked list element
@@ -504,6 +518,8 @@ int main(int argc, char* argv[]) {
 				//close the socket
 				syslog(LOG_DEBUG, "Closed connection from %s\n", host);
 				close(tdp->nsfd); //close accepted socket	
+				if(USE_AESD_CHAR_DEVICE)
+					close(tdp->fd); //close the driver	
 			
 				//free the thread
 				free(tdp);
@@ -529,13 +545,15 @@ int main(int argc, char* argv[]) {
 		threadp = NULL;
 	}
 	
+	syslog(LOG_DEBUG, "Made it through the threads.\n");
+	
 	free(now);
 	pthread_mutex_destroy(&mutex);
 	 
-	close(fd); //close writing file
+	if(!USE_AESD_CHAR_DEVICE) close(fd); //close writing file
 	close(sfd); //close socket
 	
-	unlink(FILENAME);
+	if(!USE_AESD_CHAR_DEVICE) unlink(FILENAME); //remove file
 	closelog();
 	return result;
 }
