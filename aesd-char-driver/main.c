@@ -19,6 +19,7 @@
 #include <linux/fs.h> // file_operations
 #include <linux/slab.h> /* kmalloc() */
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -46,6 +47,71 @@ int aesd_release(struct inode *inode, struct file *filp)
     PDEBUG("release");
     //shouldn't need to do anything since I didn't malloc in open
     return 0;
+}
+
+loff_t aesd_llseek(struct file *filp, loff_t offset, int whence) 
+{
+    struct aesd_dev* dev = filp->private_data;
+    struct aesd_circular_buffer* cbuf = dev->cbuf;
+    
+    loff_t size = 0; //set to size of full circular buffer
+    
+    uint8_t index;
+    struct aesd_buffer_entry *entry;
+    AESD_CIRCULAR_BUFFER_FOREACH(entry,cbuf,index) {
+        size = size + entry->size;
+    }
+    
+    loff_t new_pos = fixed_size_llseek(filp, offset, whence, size);
+    
+    return new_pos;
+}
+
+/**
+ * Adjust the file offset (f_pos) parameter of @param filp based on the location specified by
+ * @param write_cmd (the zero referenced command to locate)
+ * and @param write_cmd_offset (the zero referenced offset into the command)
+ * @return 0 if successful, negative if error occurred:
+ *      -ERESTARTSYS if mutex could not be obtained
+ *      -EINVAL if write command or wrtie_cmd_offset was out of range
+ */
+static long aesd_adjust_file_offset(struct file* filp, unsigned int write_cmd, 
+					unsigned int write_cmd_offset)
+{
+    long retval = 0;
+    
+    //check for valid cmd and offset
+    
+    //calculate start offset to write_cmd
+    
+    //add write_cmd_offset
+    
+    //save output to filp->f_pos
+    
+    return retval;
+}
+
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+    long retval = 0;
+    
+    switch(cmd) {
+        case AESDCHAR_IOCSEEKTO:
+        {
+            struct aesd_seekto seekto;
+            if( copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)) != 0 ) {
+                retval = -EFAULT;
+            }
+            else {
+                retval = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
+            }
+            break;
+        }
+        default:  
+	    return -ENOTTY;
+    }
+    
+    return retval;
 }
 
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
@@ -179,9 +245,11 @@ end:
 }
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
+    .llseek =   aesd_llseek,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
+    .unlocked_ioctl = aesd_ioctl,
     .release =  aesd_release,
 };
 
