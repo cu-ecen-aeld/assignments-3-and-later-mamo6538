@@ -8,6 +8,14 @@
  *  Assignment 6 addition:
  *    This program will also spawn new threads upon each accept.
  *
+ *  Assignment 8 addition:
+ *    This program will also use an aesd char driver instead of a file
+ *    if the USE_AESD_CHAR_DEVICE flag is defined.  
+ *
+ *  Assignment 9 addition:
+ *    This program will utilize the aesd-char-driver's llseek and ioctl
+ *    and swaps out pread for read.  
+ *
  * Exit:
  *  This application will exit upon reciept of a signal or failure to connect.  
  *  It will specifically handle SIGINT and SIGTERM gracefully.
@@ -36,12 +44,20 @@ static void timer_handler( int sn ) {
 }
 
 /* DO_IOCTL
- *
+ * Description: handles running the IOCTL driver command
+ *   If the data buffer is in fact an ioctl command.
+ * Inputs:
+ *   fd = file descriptor for the device driver
+ *   data = data buffer holding the ioctl command
+ *   len = size of data buffer
+ * Outputs:
+ *   result = 0 if successful ioctl command run,
+ *	     -1 upon failure or an invalid command for ioctl
  */
 int do_ioctl(int fd, char* data, ssize_t len) {
 	int result = 0;
 	
-	//error checking
+	//CHECK that it is a valid IOCTL command
 	if(!data) {
 		syslog(LOG_ERR, "ERROR:do_ioctl received Null pointer");
 		return -1;
@@ -91,7 +107,8 @@ int do_ioctl(int fd, char* data, ssize_t len) {
 
 /* FILE_WRITE 
  * Description: writes packet to end of file
- *   specifically handles errors in writing
+ *   or performs ioctl command
+ *   specifically handles errors and locking
  * Input:
  *  fd = file descriptor
  *  data = address of data to write
@@ -101,6 +118,11 @@ int do_ioctl(int fd, char* data, ssize_t len) {
  */
 int file_write(int fd, char* data, ssize_t len, pthread_mutex_t* m) {
 	int result;
+	
+	if(USE_AESD_CHAR_DEVICE) { //check ioctl
+		int rc = do_ioctl(fd, data, len);
+		if(rc == 0) return 0;
+	}
 	
 	//try to lock
 	result = pthread_mutex_lock(m);
@@ -148,7 +170,11 @@ int send_line(int socket, int fd) {
 	
 	while(1) {
 		//read from socket the max allowed at a time
-		ssize_t num_read = pread(fd, read_buf, MAX_BUF_SIZE, cur_off);
+		ssize_t num_read = 0;
+		if(USE_AESD_CHAR_DEVICE)
+			num_read = read(fd, read_buf, MAX_BUF_SIZE);
+		else
+			num_read = pread(fd, read_buf, MAX_BUF_SIZE, cur_off);
 		if(num_read == -1) {
 			syslog(LOG_ERR, "Buffered file read:%m\n");
 			result = -1;
@@ -246,9 +272,6 @@ int read_packet(int socket, int fd, pthread_mutex_t* m) {
 	
 	//only write packet upon successful read
 	if(result == 1 || result == 0) {
-		//check ioctl
-		
-		
 		//write buffer to file
 		int num_w = file_write(fd, buffer, bufs, m);
 		if(num_w != 0) {

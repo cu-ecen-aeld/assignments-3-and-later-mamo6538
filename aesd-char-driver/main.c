@@ -101,7 +101,7 @@ static long aesd_adjust_file_offset(struct file* filp, unsigned int write_cmd,
     }
     
     //check for valid offset
-    uint8_t cmd_index = cbuf->out_offs + write_cmd_offset - 1;
+    uint8_t cmd_index = cbuf->out_offs + write_cmd;
     if(cmd_index >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) {
         cmd_index = cmd_index - AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
