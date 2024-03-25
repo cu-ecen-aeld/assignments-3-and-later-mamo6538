@@ -1,4 +1,4 @@
-/* Assignment 5 & 6 Socket code
+/* Assignment 5-9 Socket code
  * Author: Madeleine Monfort
  * Description:
  *  Creates a socket bound to port 9000 that echoes back everything it receives.
@@ -6,15 +6,15 @@
  *  This program has the ability to run as a daemon with the '-d' flag.
  *  
  *  Assignment 6 addition:
- *    This program will also spawn new threads upon each accept.
+ *    This program will also spawn new threads upon each accept and print timestamps.
  *
  *  Assignment 8 addition:
  *    This program will also use an aesd char driver instead of a file
- *    if the USE_AESD_CHAR_DEVICE flag is defined.  
+ *    if the USE_AESD_CHAR_DEVICE flag is defined. It will not print timestamps. 
  *
  *  Assignment 9 addition:
  *    This program will utilize the aesd-char-driver's llseek and ioctl
- *    and swaps out pread for read.  
+ *    and therefore swaps out pread for read.  
  *
  * Exit:
  *  This application will exit upon reciept of a signal or failure to connect.  

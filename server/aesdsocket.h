@@ -1,4 +1,10 @@
-
+/*
+ * aesdsocket.h
+ *
+ *  Created on: Feb 28, 2024
+ *      Author: Madeleine Monfort
+ */
+ 
 #ifndef AESDSOCKET_H_
 #define AESDSOCKET_H_
 //-------------------------INCLUDES-------------------------
@@ -60,7 +66,7 @@ struct thread_data{
 	int nsfd; //file descriptor for the socket
 	int fd; //file descriptor for the written file
 	int complete_flag; //1 if success, -1 if failure, 0 if not complete
-	char host[NI_MAXHOST];
+	char host[NI_MAXHOST]; //to hold the hostname per socket
 };
 
 //Linked list of threads structure

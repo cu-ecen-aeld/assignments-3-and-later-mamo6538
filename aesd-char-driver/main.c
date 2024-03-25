@@ -58,11 +58,11 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
     
     uint8_t index;
     struct aesd_buffer_entry *entry;
-    //mutex_lock(dev->lock_cc);
+    mutex_lock(dev->lock_cc);
     AESD_CIRCULAR_BUFFER_FOREACH(entry,cbuf,index) {
         size = size + entry->size;
     }
-    //mutex_unlock(dev->lock_cc);
+    mutex_unlock(dev->lock_cc);
     
     loff_t new_pos = fixed_size_llseek(filp, offset, whence, size);
     
@@ -92,16 +92,22 @@ static long aesd_adjust_file_offset(struct file* filp, unsigned int write_cmd,
         retval = -EINVAL;
         goto end;
     }
-    //TODO:may need to lock cbuf accesses?
-    uint8_t bufs = cbuf->in_offs - cbuf->out_offs;
-    if(cbuf->full) bufs = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    //locking
+    mutex_lock(dev->lock_cc);
+    uint8_t out_o = cbuf->out_offs;
+    uint8_t in_o = cbuf->in_offs;
+    bool full = cbuf->full;
+    mutex_unlock(dev->lock_cc);
+    
+    uint8_t bufs = in_o - out_o;
+    if(full) bufs = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     if(write_cmd > bufs) {
         retval = -EINVAL;
         goto end;
     }
     
     //check for valid offset
-    uint8_t cmd_index = cbuf->out_offs + write_cmd;
+    uint8_t cmd_index = out_o + write_cmd;
     if(cmd_index >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) {
         cmd_index = cmd_index - AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
@@ -114,7 +120,7 @@ static long aesd_adjust_file_offset(struct file* filp, unsigned int write_cmd,
     
     //calculate start offset to write_cmd
     struct aesd_buffer_entry *entry;
-    uint8_t i = cbuf->out_offs;
+    uint8_t i = out_o;
     size_t new_offs = 0;
     while(i != cmd_index) {
     	//set entry
@@ -145,7 +151,6 @@ end:
 
 long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-    PDEBUG("ioctl");
     long retval = 0;
     
     //copied from scull driver ioctl
@@ -187,9 +192,9 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     //get entry at fpos
     size_t entry_pos = 0;
     
-    //mutex_lock(dev->lock_cc);
+    mutex_lock(dev->lock_cc);
     struct aesd_buffer_entry* entry = aesd_circular_buffer_find_entry_offset_for_fpos(cbuf, *f_pos, &entry_pos);
-    //mutex_unlock(dev->lock_cc);
+    mutex_unlock(dev->lock_cc);
     
     //do error checking
     if(!entry) {
