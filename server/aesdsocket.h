@@ -44,7 +44,6 @@
 
 
 //-------------------------GLOBALS-------------------------
-char host[NI_MAXHOST];
 int caught_timer = 0;
 int caught_sig = 0;
 int sfd; //make socket global for shutdown
@@ -61,6 +60,7 @@ struct thread_data{
 	int nsfd; //file descriptor for the socket
 	int fd; //file descriptor for the written file
 	int complete_flag; //1 if success, -1 if failure, 0 if not complete
+	char host[NI_MAXHOST];
 };
 
 //Linked list of threads structure

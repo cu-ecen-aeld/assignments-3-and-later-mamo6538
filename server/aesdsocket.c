@@ -288,7 +288,7 @@ int read_packet(int socket, int fd, pthread_mutex_t* m) {
  * Input: sfd = original socket file descriptor
  * Output: new_sfd = new socket file descriptor for receiving, -1 on error
  */
-int accept_socket(int sfd) {
+int accept_socket(int sfd, char* host) {
 	//accept connection
 	struct sockaddr_storage client_addr;
 	socklen_t client_addr_size = sizeof client_addr;
@@ -298,7 +298,7 @@ int accept_socket(int sfd) {
 		return -1;
 	}
 	//pull client_ip from client_addr
-	int rc = getnameinfo((struct sockaddr*)&client_addr, client_addr_size, host, sizeof(host), NULL, 0, NI_NUMERICHOST);
+	int rc = getnameinfo((struct sockaddr*)&client_addr, client_addr_size, host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
 	if(rc != 0) {
 		syslog(LOG_ERR, "Failed to get new hostname:%m\n");
 	}
@@ -499,7 +499,8 @@ int main(int argc, char* argv[]) {
 	
 	while(!caught_sig && !result) {
 		/*------CREATE SOCKET RX THREAD------*/
-		int nsfd = accept_socket(sfd);
+		char host[NI_MAXHOST];
+		int nsfd = accept_socket(sfd, host);
 		if(nsfd != -1) { //success
 			//----create a new thread----
 			pthread_t thread;
@@ -524,6 +525,7 @@ int main(int argc, char* argv[]) {
 			td->nsfd = nsfd;
 			td->fd = fd;
 			td->complete_flag = 0;
+			memcpy(td->host, host, NI_MAXHOST);
 			
 			//setup linked list element
 			slist_thread_t* threadp = malloc(sizeof(slist_thread_t));
@@ -595,8 +597,8 @@ int main(int argc, char* argv[]) {
 					syslog(LOG_ERR, "threadfunc failed.\n");
 				struct thread_data* tdp = (struct thread_data *) thread_rtn;
 				
-				//close the socket
-				syslog(LOG_DEBUG, "Closed connection from %s\n", host);
+				//close the socket(s)
+				syslog(LOG_DEBUG, "Closed connection from %s\n", tdp->host);
 				close(tdp->nsfd); //close accepted socket	
 				if(USE_AESD_CHAR_DEVICE)
 					close(tdp->fd); //close the driver	
@@ -620,6 +622,14 @@ int main(int argc, char* argv[]) {
 		slist_thread_t* threadp = SLIST_FIRST(&head);
 		SLIST_REMOVE_HEAD(&head, entries);
 		pthread_join(threadp->thread, &thread_rtn);
+		
+		//close the socket(s)
+		struct thread_data* tdp = (struct thread_data *) thread_rtn;
+		syslog(LOG_DEBUG, "Closed connection from %s\n", tdp->host);
+		close(tdp->nsfd); //close accepted socket	
+		if(USE_AESD_CHAR_DEVICE)
+			close(tdp->fd); //close the driver
+		
 		free(thread_rtn);
 		free(threadp);
 		threadp = NULL;
