@@ -58,9 +58,11 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
     
     uint8_t index;
     struct aesd_buffer_entry *entry;
+    //mutex_lock(dev->lock_cc);
     AESD_CIRCULAR_BUFFER_FOREACH(entry,cbuf,index) {
         size = size + entry->size;
     }
+    //mutex_unlock(dev->lock_cc);
     
     loff_t new_pos = fixed_size_llseek(filp, offset, whence, size);
     
@@ -78,22 +80,78 @@ loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 static long aesd_adjust_file_offset(struct file* filp, unsigned int write_cmd, 
 					unsigned int write_cmd_offset)
 {
+    PDEBUG("ioctl: cmd=%d and offset=%d", write_cmd, write_cmd_offset);
     long retval = 0;
     
-    //check for valid cmd and offset
+    struct aesd_dev* dev = filp->private_data;
+    struct aesd_circular_buffer* cbuf = dev->cbuf;
+    
+    //check for valid cmd
+    if(write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) 
+    {
+        retval = -EINVAL;
+        goto end;
+    }
+    //TODO:may need to lock cbuf accesses?
+    uint8_t bufs = cbuf->in_offs - cbuf->out_offs;
+    if(cbuf->full) bufs = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    if(write_cmd > bufs) {
+        retval = -EINVAL;
+        goto end;
+    }
+    
+    //check for valid offset
+    uint8_t cmd_index = cbuf->out_offs + write_cmd_offset - 1;
+    if(cmd_index >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) {
+        cmd_index = cmd_index - AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+    
+    uint8_t cmd_size = cbuf->entry[cmd_index].size;
+    if(write_cmd_offset > cmd_size) {
+        retval = -EINVAL;
+        goto end;
+    }
     
     //calculate start offset to write_cmd
+    struct aesd_buffer_entry *entry;
+    uint8_t i = cbuf->out_offs;
+    size_t new_offs = 0;
+    while(i != cmd_index) {
+    	//set entry
+    	entry = &(cbuf->entry[i]);
+        
+        new_offs = new_offs + entry->size;
+        
+        //handle wrap-around
+        if(i == (AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - 1))
+            i = 0;
+        else 
+            i++;
+    }
     
     //add write_cmd_offset
+    new_offs = new_offs + write_cmd_offset;
     
     //save output to filp->f_pos
+    mutex_lock(dev->lock_fpos);
+    filp->f_pos = new_offs;
+    mutex_unlock(dev->lock_fpos);
     
+    retval = 0;
+    
+end:
     return retval;
 }
 
 long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
+    PDEBUG("ioctl");
     long retval = 0;
+    
+    //copied from scull driver ioctl
+    //checks the command before throwing into case switch
+    if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC) return -ENOTTY;
+    if (_IOC_NR(cmd) > AESDCHAR_IOC_MAXNR) return -ENOTTY;
     
     switch(cmd) {
         case AESDCHAR_IOCSEEKTO:
@@ -128,12 +186,17 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     
     //get entry at fpos
     size_t entry_pos = 0;
+    
+    //mutex_lock(dev->lock_cc);
     struct aesd_buffer_entry* entry = aesd_circular_buffer_find_entry_offset_for_fpos(cbuf, *f_pos, &entry_pos);
+    //mutex_unlock(dev->lock_cc);
+    
     //do error checking
     if(!entry) {
         retval = 0; //end of file reached
         goto end;
     }
+    char* tmp_ptr = entry->buffptr;
 
     //do size math
     size_t new_size = entry->size - entry_pos; 
@@ -141,7 +204,6 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
         new_size = count;
     
     //copy data to user
-    char* tmp_ptr = entry->buffptr;
     tmp_ptr = tmp_ptr + entry_pos;
     if(copy_to_user(buf, tmp_ptr, new_size)) {
         retval = -EFAULT;
@@ -149,9 +211,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     }
     
     //update fpos
-    mutex_lock(dev->lock_fpos);
     *f_pos += new_size;
-    mutex_unlock(dev->lock_fpos);
     
     //update retval
     retval = new_size;
@@ -206,6 +266,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     //check if cc was full command (end in '\n')
     command_buf = tmp_ptr + cc.size - 1;
     if(*command_buf == '\n') {
+        mutex_lock(dev->lock_cc);
         //handle overwriting freeing
         if(cbuf->full) {
             uint8_t index = cbuf->in_offs;
@@ -215,7 +276,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
             }
         }
         
-        mutex_lock(dev->lock_cc);
         //perform a write operation on cbuf
         cc.buffptr = tmp_ptr;
         aesd_circular_buffer_add_entry(cbuf, &cc);
@@ -342,6 +402,10 @@ void aesd_cleanup_module(void)
         kfree(aesd_device.current_command.buffptr);
     
     //release the mutexes?
+    mutex_destroy(aesd_device.lock_cc);
+    mutex_destroy(aesd_device.lock_fpos);
+    kfree(aesd_device.lock_cc);
+    kfree(aesd_device.lock_fpos);
 
     unregister_chrdev_region(devno, 1);
 }

@@ -35,6 +35,60 @@ static void timer_handler( int sn ) {
 	}
 }
 
+/* DO_IOCTL
+ *
+ */
+int do_ioctl(int fd, char* data, ssize_t len) {
+	int result = 0;
+	
+	//error checking
+	if(!data) {
+		syslog(LOG_ERR, "ERROR:do_ioctl received Null pointer");
+		return -1;
+	}
+	if(len < IOCTL_CMD_L) {
+		syslog(LOG_DEBUG, "Not IOCTL.");	
+		return -1;
+	}
+	result = strncmp(data, IOCTL_CMD, IOCTL_CMD_L);
+	if(result != 0) { //no match
+		syslog(LOG_DEBUG, "Not IOCTL.");
+		return -1;
+	}
+	
+	//setup cmd and offset
+	const char delimiters[] = ":,";
+	char* token = strtok(data, delimiters);
+	if(!token) {
+		syslog(LOG_ERR, "ERROR: IOCTL not formatted correctly.");
+		return -1;
+	}
+	char* cmd_c = strtok(NULL, delimiters);
+	if(!cmd_c) {
+		syslog(LOG_ERR, "ERROR: IOCTL not formatted correctly.");
+		return -1;
+	}
+	char* offset_c = strtok(NULL, delimiters);
+	if(!offset_c) {
+		syslog(LOG_ERR, "ERROR: IOCTL not formatted correctly.");
+		return -1;
+	}
+	
+	//convert cmd and offset to 32-bit integers
+	int cmd = atoi(cmd_c);
+	int offset = atoi(offset_c);
+	
+	//setup seekto
+	struct aesd_seekto seekto;
+	seekto.write_cmd = cmd;
+	seekto.write_cmd_offset = offset;
+	
+	//call ioctl
+	result = ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto);
+	
+	return result;
+}
+
 /* FILE_WRITE 
  * Description: writes packet to end of file
  *   specifically handles errors in writing
@@ -192,6 +246,9 @@ int read_packet(int socket, int fd, pthread_mutex_t* m) {
 	
 	//only write packet upon successful read
 	if(result == 1 || result == 0) {
+		//check ioctl
+		
+		
 		//write buffer to file
 		int num_w = file_write(fd, buffer, bufs, m);
 		if(num_w != 0) {

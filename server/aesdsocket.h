@@ -18,6 +18,8 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <signal.h>
+//assignment 9 includes:
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 //-------------------------DEFINES-------------------------
 #define S_PORT "9000"
@@ -28,6 +30,9 @@
 #define MAX_TIME_SIZE 60
 
 #define USE_AESD_CHAR_DEVICE 1
+
+#define IOCTL_CMD "AESDCHAR_IOCSEEKTO"
+#define IOCTL_CMD_L 18
 
 #undef FILENAME             /* undef it, just in case */
 #if USE_AESD_CHAR_DEVICE
