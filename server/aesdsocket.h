@@ -1,4 +1,10 @@
-
+/*
+ * aesdsocket.h
+ *
+ *  Created on: Feb 28, 2024
+ *      Author: Madeleine Monfort
+ */
+ 
 #ifndef AESDSOCKET_H_
 #define AESDSOCKET_H_
 //-------------------------INCLUDES-------------------------
@@ -18,6 +24,8 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <signal.h>
+//assignment 9 includes:
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 //-------------------------DEFINES-------------------------
 #define S_PORT "9000"
@@ -29,6 +37,9 @@
 
 #define USE_AESD_CHAR_DEVICE 1
 
+#define IOCTL_CMD "AESDCHAR_IOCSEEKTO"
+#define IOCTL_CMD_L 18
+
 #undef FILENAME             /* undef it, just in case */
 #if USE_AESD_CHAR_DEVICE
 #    define FILENAME "/dev/aesdchar"
@@ -39,7 +50,6 @@
 
 
 //-------------------------GLOBALS-------------------------
-char host[NI_MAXHOST];
 int caught_timer = 0;
 int caught_sig = 0;
 int sfd; //make socket global for shutdown
@@ -56,6 +66,7 @@ struct thread_data{
 	int nsfd; //file descriptor for the socket
 	int fd; //file descriptor for the written file
 	int complete_flag; //1 if success, -1 if failure, 0 if not complete
+	char host[NI_MAXHOST]; //to hold the hostname per socket
 };
 
 //Linked list of threads structure

@@ -1,4 +1,4 @@
-/* Assignment 5 & 6 Socket code
+/* Assignment 5-9 Socket code
  * Author: Madeleine Monfort
  * Description:
  *  Creates a socket bound to port 9000 that echoes back everything it receives.
@@ -6,7 +6,15 @@
  *  This program has the ability to run as a daemon with the '-d' flag.
  *  
  *  Assignment 6 addition:
- *    This program will also spawn new threads upon each accept.
+ *    This program will also spawn new threads upon each accept and print timestamps.
+ *
+ *  Assignment 8 addition:
+ *    This program will also use an aesd char driver instead of a file
+ *    if the USE_AESD_CHAR_DEVICE flag is defined. It will not print timestamps. 
+ *
+ *  Assignment 9 addition:
+ *    This program will utilize the aesd-char-driver's llseek and ioctl
+ *    and therefore swaps out pread for read.  
  *
  * Exit:
  *  This application will exit upon reciept of a signal or failure to connect.  
@@ -35,9 +43,72 @@ static void timer_handler( int sn ) {
 	}
 }
 
+/* DO_IOCTL
+ * Description: handles running the IOCTL driver command
+ *   If the data buffer is in fact an ioctl command.
+ * Inputs:
+ *   fd = file descriptor for the device driver
+ *   data = data buffer holding the ioctl command
+ *   len = size of data buffer
+ * Outputs:
+ *   result = 0 if successful ioctl command run,
+ *	     -1 upon failure or an invalid command for ioctl
+ */
+int do_ioctl(int fd, char* data, ssize_t len) {
+	int result = 0;
+	
+	//CHECK that it is a valid IOCTL command
+	if(!data) {
+		syslog(LOG_ERR, "ERROR:do_ioctl received Null pointer");
+		return -1;
+	}
+	if(len < IOCTL_CMD_L) {
+		syslog(LOG_DEBUG, "Not IOCTL.");	
+		return -1;
+	}
+	result = strncmp(data, IOCTL_CMD, IOCTL_CMD_L);
+	if(result != 0) { //no match
+		syslog(LOG_DEBUG, "Not IOCTL.");
+		return -1;
+	}
+	
+	//setup cmd and offset
+	const char delimiters[] = ":,";
+	char* token = strtok(data, delimiters);
+	if(!token) {
+		syslog(LOG_ERR, "ERROR: IOCTL not formatted correctly.");
+		return -1;
+	}
+	char* cmd_c = strtok(NULL, delimiters);
+	if(!cmd_c) {
+		syslog(LOG_ERR, "ERROR: IOCTL not formatted correctly.");
+		return -1;
+	}
+	char* offset_c = strtok(NULL, delimiters);
+	if(!offset_c) {
+		syslog(LOG_ERR, "ERROR: IOCTL not formatted correctly.");
+		return -1;
+	}
+	
+	//convert cmd and offset to 32-bit integers
+	int cmd = atoi(cmd_c);
+	int offset = atoi(offset_c);
+	
+	//setup seekto
+	struct aesd_seekto seekto;
+	seekto.write_cmd = cmd;
+	seekto.write_cmd_offset = offset;
+	
+	//call ioctl
+	result = ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto);
+	
+	return result;
+}
+
 /* FILE_WRITE 
  * Description: writes packet to end of file
- *   specifically handles errors in writing
+ *   or performs ioctl command
+ *   specifically handles errors and locking
  * Input:
  *  fd = file descriptor
  *  data = address of data to write
@@ -47,6 +118,11 @@ static void timer_handler( int sn ) {
  */
 int file_write(int fd, char* data, ssize_t len, pthread_mutex_t* m) {
 	int result;
+	
+	if(USE_AESD_CHAR_DEVICE) { //check ioctl
+		int rc = do_ioctl(fd, data, len);
+		if(rc == 0) return 0;
+	}
 	
 	//try to lock
 	result = pthread_mutex_lock(m);
@@ -94,7 +170,11 @@ int send_line(int socket, int fd) {
 	
 	while(1) {
 		//read from socket the max allowed at a time
-		ssize_t num_read = pread(fd, read_buf, MAX_BUF_SIZE, cur_off);
+		ssize_t num_read = 0;
+		if(USE_AESD_CHAR_DEVICE)
+			num_read = read(fd, read_buf, MAX_BUF_SIZE);
+		else
+			num_read = pread(fd, read_buf, MAX_BUF_SIZE, cur_off);
 		if(num_read == -1) {
 			syslog(LOG_ERR, "Buffered file read:%m\n");
 			result = -1;
@@ -208,7 +288,7 @@ int read_packet(int socket, int fd, pthread_mutex_t* m) {
  * Input: sfd = original socket file descriptor
  * Output: new_sfd = new socket file descriptor for receiving, -1 on error
  */
-int accept_socket(int sfd) {
+int accept_socket(int sfd, char* host) {
 	//accept connection
 	struct sockaddr_storage client_addr;
 	socklen_t client_addr_size = sizeof client_addr;
@@ -218,7 +298,7 @@ int accept_socket(int sfd) {
 		return -1;
 	}
 	//pull client_ip from client_addr
-	int rc = getnameinfo((struct sockaddr*)&client_addr, client_addr_size, host, sizeof(host), NULL, 0, NI_NUMERICHOST);
+	int rc = getnameinfo((struct sockaddr*)&client_addr, client_addr_size, host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
 	if(rc != 0) {
 		syslog(LOG_ERR, "Failed to get new hostname:%m\n");
 	}
@@ -419,7 +499,8 @@ int main(int argc, char* argv[]) {
 	
 	while(!caught_sig && !result) {
 		/*------CREATE SOCKET RX THREAD------*/
-		int nsfd = accept_socket(sfd);
+		char host[NI_MAXHOST];
+		int nsfd = accept_socket(sfd, host);
 		if(nsfd != -1) { //success
 			//----create a new thread----
 			pthread_t thread;
@@ -444,6 +525,7 @@ int main(int argc, char* argv[]) {
 			td->nsfd = nsfd;
 			td->fd = fd;
 			td->complete_flag = 0;
+			memcpy(td->host, host, NI_MAXHOST);
 			
 			//setup linked list element
 			slist_thread_t* threadp = malloc(sizeof(slist_thread_t));
@@ -515,8 +597,8 @@ int main(int argc, char* argv[]) {
 					syslog(LOG_ERR, "threadfunc failed.\n");
 				struct thread_data* tdp = (struct thread_data *) thread_rtn;
 				
-				//close the socket
-				syslog(LOG_DEBUG, "Closed connection from %s\n", host);
+				//close the socket(s)
+				syslog(LOG_DEBUG, "Closed connection from %s\n", tdp->host);
 				close(tdp->nsfd); //close accepted socket	
 				if(USE_AESD_CHAR_DEVICE)
 					close(tdp->fd); //close the driver	
@@ -540,6 +622,14 @@ int main(int argc, char* argv[]) {
 		slist_thread_t* threadp = SLIST_FIRST(&head);
 		SLIST_REMOVE_HEAD(&head, entries);
 		pthread_join(threadp->thread, &thread_rtn);
+		
+		//close the socket(s)
+		struct thread_data* tdp = (struct thread_data *) thread_rtn;
+		syslog(LOG_DEBUG, "Closed connection from %s\n", tdp->host);
+		close(tdp->nsfd); //close accepted socket	
+		if(USE_AESD_CHAR_DEVICE)
+			close(tdp->fd); //close the driver
+		
 		free(thread_rtn);
 		free(threadp);
 		threadp = NULL;
